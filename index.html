@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ソリティア">
+<meta name="theme-color" content="#051a05">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Solitaire</title>
+<style>
+/* ===== リセット・ベース ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --accent: #00ffcc;
+  --bg-dark: #051a05;
+  /* カード幅: 7列が隙間込みで画面幅に収まる値をJSで計算してセット */
+  --cw: 44px;
+  --ch: 66px; /* 縦横比 3:2 でJSが更新 */
+  --gap: 4px;
+  --pad: 6px;
+  --overlap: 20px;
+  --radius: 5px;
+  --font-rank: 14px;
+  --font-suit: 12px;
+  --font-large: 28px;
+}
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: radial-gradient(ellipse at center, #1b5e20 0%, #051a05 100%);
+  font-family: 'Helvetica Neue', sans-serif;
+  color: #fff;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+/* ===== 上部バー ===== */
+#top-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; background: rgba(0,0,0,0.85);
+  border-bottom: 1px solid var(--accent);
+  font-size: 11px; white-space: nowrap; height: 30px;
+}
+#top-bar .hi { color: var(--accent); font-weight: bold; }
+
+/* ===== ボタン行 ===== */
+#btn-bar {
+  display: grid; grid-template-columns: repeat(5,1fr);
+  gap: 3px; padding: 4px 6px; background: #111; height: 36px;
+}
+#btn-bar button {
+  background: #2a2a2a; color: #ddd;
+  border: 1px solid #3a3a3a; border-radius: 4px;
+  font-size: 9px; font-weight: bold; letter-spacing: 0.03em;
+  cursor: pointer; transition: background 0.1s, color 0.1s;
+  padding: 0;
+}
+#btn-bar button:active, #btn-bar button.active { background: var(--accent); color: #000; }
+
+/* ===== ゲームエリア ===== */
+#game {
+  padding: var(--pad);
+  display: flex; flex-direction: column; gap: var(--gap);
+}
+
+/* デッキ行・場札行：共通 */
+.row {
+  display: flex;
+  gap: var(--gap);
+  align-items: flex-start;
+}
+
+/* 山札・組札の固定ピル */
+.pile {
+  width: var(--cw); height: var(--ch);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: var(--radius);
+  position: relative; flex-shrink: 0;
+  cursor: pointer;
+}
+.pile.empty-hint::before {
+  content: attr(data-hint);
+  position: absolute; top:50%; left:50%; transform: translate(-50%,-50%);
+  color: rgba(255,255,255,0.2); font-size: var(--font-rank); pointer-events: none;
+}
+
+/* 捨て札エリア（draw3時に横にはみ出す） */
+#waste-wrap {
+  position: relative;
+  width: var(--cw); height: var(--ch);
+  flex-shrink: 0;
+}
+#waste-wrap .card {
+  position: absolute !important;
+  top: 0;
+}
+
+/* スペーサー */
+.spacer { flex: 1; min-width: 0; }
+
+/* 場札列 */
+#tab-row {
+  display: flex;
+  gap: var(--gap);
+  align-items: flex-start;
+}
+.tab-pile {
+  flex: 1; min-width: 0;
+  min-height: var(--ch);
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: var(--radius);
+  position: relative;
+}
+.tab-pile.empty-k::before {
+  content: 'K';
+  position: absolute; top:50%; left:50%; transform: translate(-50%,-50%);
+  color: rgba(255,255,255,0.1); font-size: var(--font-large); font-weight: bold;
+  pointer-events: none;
+}
+
+/* ===== カード ===== */
+.card {
+  width: var(--cw); height: var(--ch);
+  background: #fff; border-radius: var(--radius);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  position: absolute;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.12s;
+}
+.card.back {
+  background: repeating-linear-gradient(
+    45deg, #1a237e, #1a237e 8px, #283593 8px, #283593 16px
+  );
+  border: 1px solid rgba(255,255,255,0.4);
+}
+.card.red  { color: #c62828; }
+.card.black { color: #1a1a1a; }
+
+.c-rank {
+  position: absolute; top: 1px; left: 2px;
+  font-size: var(--font-rank); font-weight: 900; line-height: 1;
+}
+.c-suit {
+  position: absolute; top: 1px; right: 2px;
+  font-size: var(--font-suit); line-height: 1;
+}
+.c-big {
+  position: absolute;
+  top: 55%; left: 50%; transform: translate(-50%,-50%);
+  font-size: var(--font-large); opacity: 0.85; pointer-events: none;
+  line-height: 1;
+}
+
+/* 選択 & ヒント */
+.card.selected {
+  box-shadow: 0 0 0 2px var(--accent), 0 3px 10px rgba(0,255,204,0.4) !important;
+  z-index: 500 !important;
+}
+.card.hint-glow {
+  box-shadow: 0 0 12px 4px var(--accent) !important;
+  z-index: 400 !important;
+}
+.pile.hint-glow {
+  box-shadow: 0 0 12px 4px var(--accent) !important;
+}
+
+/* ===== ダイアログ共通 ===== */
+.dialog {
+  display: none; position: fixed;
+  top:50%; left:50%; transform: translate(-50%,-50%);
+  background: rgba(5,10,5,0.97); border: 2px solid var(--accent);
+  border-radius: 16px; padding: 24px 20px; text-align: center;
+  z-index: 2000; min-width: 230px;
+  box-shadow: 0 0 40px rgba(0,255,204,0.3);
+}
+.dialog h2 { color: var(--accent); margin-bottom: 8px; font-size: 22px; }
+.dialog p  { font-size: 13px; margin-bottom: 16px; color: #ccc; }
+.dialog-btns { display: flex; gap: 10px; justify-content: center; }
+.dialog-btns button {
+  padding: 8px 22px; font-size: 13px; font-weight: bold;
+  border-radius: 8px; cursor: pointer;
+  border: 1px solid #555; background: #333; color: #fff;
+  transition: background 0.1s;
+}
+.dialog-btns button.danger { background: #7b1010; border-color: #e53935; }
+.dialog-btns button:active { opacity: 0.7; }
+
+/* ===== 紙吹雪キャンバス ===== */
+#fx-canvas {
+  position: fixed; inset: 0;
+  pointer-events: none; z-index: 1999; display: none;
+}
+</style>
+</head>
+<body>
+
+<!-- スコア・タイマー -->
+<div id="top-bar">
+  <div>SCORE: <span id="score" class="hi">0</span> &nbsp;BEST: <span id="best-score" class="hi">0</span></div>
+  <div>TIME: <span id="timer">00:00</span> &nbsp;BEST: <span id="best-time" class="hi">--:--</span></div>
+</div>
+
+<!-- ボタン -->
+<div id="btn-bar">
+  <button id="btn-new"  onclick="confirmNew()">NEW</button>
+  <button id="btn-undo" onclick="undo()">UNDO</button>
+  <button id="btn-hint" onclick="showHint()">HINT</button>
+  <button id="btn-draw" onclick="toggleDraw()">DRAW:1</button>
+  <button id="btn-side" onclick="toggleSide()">山札:左</button>
+</div>
+
+<!-- ゲームエリア -->
+<div id="game">
+  <div class="row" id="deck-row"></div>
+  <div id="tab-row"></div>
+</div>
+
+<!-- 勝利ダイアログ -->
+<div class="dialog" id="dlg-win">
+  <h2>🎉 VICTORY!</h2>
+  <p id="win-stats"></p>
+  <div class="dialog-btns">
+    <button onclick="startGame()">もう一度</button>
+  </div>
+</div>
+
+<!-- NEW確認ダイアログ -->
+<div class="dialog" id="dlg-confirm">
+  <p>ゲームをリセットしますか？</p>
+  <div class="dialog-btns">
+    <button class="danger" onclick="doConfirmYes()">YES</button>
+    <button onclick="doConfirmNo()">NO</button>
+  </div>
+</div>
+
+<canvas id="fx-canvas"></canvas>
+
+<script>
+'use strict';
+
+// ============================================================
+//  定数
+// ============================================================
+const SUITS  = ['♥','♦','♣','♠'];
+const RANKS  = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+const COLOR  = ['red','red','black','black']; // SUITS順
+const HIST_MAX = 30;
+
+// ============================================================
+//  ゲーム状態
+// ============================================================
+let stock=[], waste=[], found=[[],[],[],[]], tab=[[],[],[],[],[],[],[]];
+let drawThree=false, deckLeft=true;
+let score=0, timeEl=0, timerID=null, autoID=null;
+let isWin=false, history=[];
+let selFrom=null, selEl=null; // タッチ選択
+
+// ============================================================
+//  レイアウト計算（画面幅に応じてCSS変数を更新）
+// ============================================================
+function calcLayout() {
+  const W = window.innerWidth;
+  const pad = 6, gap = 4;
+  // 7列が画面幅に収まるカード幅
+  const cw = Math.floor((W - pad*2 - gap*6) / 7);
+  const ch = Math.floor(cw * 1.5);
+  const ol = Math.max(14, Math.floor(ch * 0.28)); // overlap
+  const fRank  = Math.max(13, Math.floor(cw * 0.48)); // ランク文字を大きく
+  const fLarge = Math.max(24, Math.floor(cw * 0.85)); // 中央スートを大きく
+
+  const r = document.documentElement;
+  r.style.setProperty('--cw',      cw + 'px');
+  r.style.setProperty('--ch',      ch + 'px');
+  r.style.setProperty('--gap',     gap + 'px');
+  r.style.setProperty('--pad',     pad + 'px');
+  r.style.setProperty('--overlap', ol + 'px');
+  r.style.setProperty('--font-rank',  fRank + 'px');
+  r.style.setProperty('--font-suit',  fRank + 'px'); // スートもランクと同サイズ
+  r.style.setProperty('--font-large', fLarge + 'px');
+  OVERLAP_PX = ol;
+  CARD_W = cw;
+  CARD_H = ch;
+}
+let OVERLAP_PX=20, CARD_W=44, CARD_H=66;
+window.addEventListener('resize', () => { calcLayout(); render(); });
+
+// ============================================================
+//  オーディオ
+// ============================================================
+let audioCtx=null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, vol=0.06) {
+  if (!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.type='sine'; o.frequency.value=freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime+dur);
+}
+
+// ============================================================
+//  タイマー
+// ============================================================
+function startTimer() {
+  if (timerID) return;
+  timerID = setInterval(() => {
+    timeEl++;
+    document.getElementById('timer').textContent = fmt(timeEl);
+  }, 1000);
+}
+function fmt(s) {
+  return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+}
+
+// ============================================================
+//  localStorage
+// ============================================================
+function saveBest() {
+  const b = parseInt(localStorage.getItem('sol_best')||'0',10);
+  if (score>b) localStorage.setItem('sol_best', score);
+  document.getElementById('best-score').textContent = Math.max(b,score);
+}
+function loadBest() {
+  const b = localStorage.getItem('sol_best');
+  document.getElementById('best-score').textContent = b||'0';
+  const t = localStorage.getItem('sol_best_time');
+  document.getElementById('best-time').textContent = t ? fmt(parseInt(t,10)) : '--:--';
+}
+function saveBestTime() {
+  const t = localStorage.getItem('sol_best_time');
+  if (!t || timeEl < parseInt(t,10)) {
+    localStorage.setItem('sol_best_time', timeEl);
+    document.getElementById('best-time').textContent = fmt(timeEl);
+  }
+}
+
+// ============================================================
+//  UIボタン操作
+// ============================================================
+function toggleDraw() {
+  drawThree = !drawThree;
+  document.getElementById('btn-draw').textContent = drawThree ? 'DRAW:3' : 'DRAW:1';
+  startGame();
+}
+function toggleSide() {
+  deckLeft = !deckLeft;
+  document.getElementById('btn-side').textContent = deckLeft ? '山札:左' : '山札:右';
+  buildDeckRow();
+  render();
+}
+function confirmNew() {
+  if (timeEl===0 || isWin) { startGame(); return; }
+  document.getElementById('dlg-confirm').style.display='block';
+}
+function doConfirmYes() {
+  document.getElementById('dlg-confirm').style.display='none';
+  startGame();
+}
+function doConfirmNo() {
+  document.getElementById('dlg-confirm').style.display='none';
+}
+
+// ============================================================
+//  DOM構築
+// ============================================================
+function buildDeckRow() {
+  const row = document.getElementById('deck-row');
+  row.innerHTML = '';
+
+  // 山札
+  const stk = el('div','pile empty-hint');
+  stk.id='stock'; stk.dataset.hint='🂠';
+  stk.addEventListener('click', drawCard);
+  stk.addEventListener('touchstart', e=>{e.preventDefault(); drawCard();}, {passive:false});
+
+  // 捨て札ラッパー
+  const ww = el('div'); ww.id='waste-wrap';
+  const wb = el('div','pile'); wb.id='waste-base';
+  ww.appendChild(wb);
+
+  const sp = el('div','spacer');
+
+  // 組札
+  const fArr=[];
+  for(let i=0;i<4;i++){
+    const f=el('div','pile foundation empty-hint');
+    f.id='f'+i; f.dataset.hint=SUITS[i]; f.dataset.fi=i;
+    f.addEventListener('drop', e=>onDrop(e,'f',i));
+    f.addEventListener('dragover', e=>e.preventDefault());
+    addPileTouchDrop(f,'f',i);
+    fArr.push(f);
+  }
+
+  if(deckLeft){
+    row.append(stk, ww, sp, ...fArr);
+  } else {
+    row.append(...fArr, sp, ww, stk);
+  }
+}
+
+function buildTabRow() {
+  const row = document.getElementById('tab-row');
+  row.innerHTML = '';
+  for(let i=0;i<7;i++){
+    const p=el('div','tab-pile empty-k');
+    p.dataset.ti=i;
+    p.addEventListener('drop', e=>onDrop(e,'tab',i));
+    p.addEventListener('dragover', e=>e.preventDefault());
+    addPileTouchDrop(p,'tab',i);
+    row.appendChild(p);
+  }
+}
+
+function el(tag, cls='') {
+  const d=document.createElement(tag);
+  if(cls) d.className=cls; return d;
+}
+
+// ============================================================
+//  タッチドロップ受付（空パイル用）
+// ============================================================
+function addPileTouchDrop(pile, type, idx) {
+  pile.addEventListener('touchstart', e=>{
+    if(!selFrom) return;
+    e.preventDefault(); e.stopPropagation();
+    const card = topCard(selFrom);
+    if (type==='tab' && canTab(card,idx)) { clearSel(); doMove(selFrom,{t:'tab',i:idx}); }
+    else if (type==='f' && canFnd(card,idx)) { clearSel(); doMove(selFrom,{t:'f',i:idx}); }
+  }, {passive:false});
+}
+
+// ============================================================
+//  カードUI生成
+// ============================================================
+function makeCard(card, from) {
+  const d = el('div', 'card ' + (card.face ? card.color : 'back'));
+
+  if (card.face) {
+    const rc = el('span','c-rank'); rc.textContent = card.rank; d.appendChild(rc);
+    const sc = el('span','c-suit'); sc.textContent = card.suit; d.appendChild(sc);
+    const bc = el('div','c-big');  bc.textContent = card.suit; d.appendChild(bc);
+  }
+
+  // クリック（PC）
+  d.addEventListener('click', e=>{ e.stopPropagation(); onCardClick(from); });
+  // ダブルクリック → 組札へ
+  d.addEventListener('dblclick', e=>{
+    e.stopPropagation();
+    if (!card.face) return;
+    for(let i=0;i<4;i++) if(canFnd(card,i)){ doMove(from,{t:'f',i}); return; }
+  });
+  // ドラッグ（PC）
+  if (card.face) {
+    d.draggable=true;
+    d.addEventListener('dragstart', e=>{
+      e.dataTransfer.setData('text/plain', JSON.stringify(from));
+      e.dataTransfer.effectAllowed='move';
+    });
+  }
+  // タッチ
+  d.addEventListener('touchstart', e=>{
+    e.preventDefault(); e.stopPropagation();
+    onTouchCard(from, d);
+  }, {passive:false});
+
+  return d;
+}
+
+// ============================================================
+//  クリック・タッチ操作
+// ============================================================
+function onCardClick(from) {
+  if (isWin) return;
+  initAudio(); startTimer();
+  const col = getCol(from);
+  if (from.t==='waste' && from.idx !== waste.length-1) return;
+  const card = from.idx!=null ? col[from.idx] : col[col.length-1];
+  if (!card||!card.face) return;
+  autoMove(from, card);
+}
+
+function onTouchCard(from, d) {
+  if (isWin) return;
+  initAudio(); startTimer();
+
+  const col = getCol(from);
+  if (from.t==='waste' && from.idx !== waste.length-1) return;
+  const card = from.idx!=null ? col[from.idx] : col[col.length-1];
+  if (!card||!card.face) return;
+
+  // 選択済みなら移動先として処理
+  if (selFrom) {
+    const sc = topCard(selFrom);
+    // 同じカード → 解除
+    if (selFrom.t===from.t && selFrom.i===from.i && selFrom.idx===from.idx) {
+      clearSel(); return;
+    }
+    if (from.t==='f' && canFnd(sc,from.i)) { clearSel(); doMove(selFrom,{t:'f',i:from.i}); return; }
+    if (from.t==='tab' && canTab(sc,from.i)) { clearSel(); doMove(selFrom,{t:'tab',i:from.i}); return; }
+    clearSel();
+  }
+  // 新規選択 → 即自動移動を試みる
+  selFrom=from; selEl=d; d.classList.add('selected');
+  autoMove(from, card);
+}
+
+// 組札優先 → 場札
+function autoMove(from, card) {
+  const col=getCol(from);
+  const isTop = (from.idx==null || from.idx===col.length-1);
+  if (from.t!=='f' && isTop) {
+    for(let i=0;i<4;i++) if(canFnd(card,i)){ clearSel(); doMove(from,{t:'f',i}); return; }
+  }
+  for(let i=0;i<7;i++){
+    if(from.t==='tab'&&from.i===i) continue;
+    if(canTab(card,i)){ clearSel(); doMove(from,{t:'tab',i}); return; }
+  }
+  // 自動移動できない場合は選択状態を維持
+}
+
+function clearSel() {
+  if (selEl) selEl.classList.remove('selected');
+  selFrom=null; selEl=null;
+}
+
+// ============================================================
+//  山札めくり
+// ============================================================
+function drawCard() {
+  if (isWin) return;
+  initAudio(); startTimer(); saveHist();
+  if (!stock.length) {
+    // wasteを山札に戻す（コピーして逆順にしてからfaceをfalseに）
+    stock = waste.slice().reverse();
+    stock.forEach(c=>{ c.face=false; });
+    waste=[];
+    beep(300,0.12);
+  } else {
+    const n = drawThree?3:1;
+    for(let i=0;i<n&&stock.length;i++){
+      const c=stock.pop(); c.face=true; waste.push(c);
+    }
+    beep(440,0.06);
+  }
+  render();
+}
+
+// ============================================================
+//  移動
+// ============================================================
+function doMove(from, to, silent=false) {
+  if (!silent) { saveHist(); beep(600,0.05); }
+  let cards;
+  if(from.t==='tab')   cards=tab[from.i].splice(from.idx);
+  else if(from.t==='waste') cards=[waste.pop()];
+  else                 cards=[found[from.i].pop()];
+
+  if(to.t==='tab'){
+    tab[to.i].push(...cards);
+    score += from.t==='f'?-10:5;
+  } else {
+    cards[0].face=true; found[to.i].push(cards[0]); score+=10;
+  }
+  if(from.t==='tab'&&tab[from.i].length){
+    const last=tab[from.i][tab[from.i].length-1];
+    if(!last.face){ last.face=true; score+=5; if(!silent) beep(900,0.06,0.08); }
+  }
+  render(); saveBest();
+  if(!silent) checkAuto();
+}
+
+// ============================================================
+//  配置判定
+// ============================================================
+function canTab(c,i){
+  const t=tab[i];
+  if(!t.length) return c.value===13;
+  const top=t[t.length-1];
+  return top.face && c.color!==top.color && c.value===top.value-1;
+}
+function canFnd(c,i){
+  const f=found[i];
+  if(!f.length) return c.value===1; // どのスートのAでも置ける
+  return c.suit===f[f.length-1].suit && c.value===f[f.length-1].value+1;
+}
+
+// ============================================================
+//  ヒント
+// ============================================================
+function showHint(){
+  const moves=findMoves();
+  if(moves.length){
+    const m=moves[Math.floor(Math.random()*moves.length)];
+    const e=findCardEl(m.from);
+    if(e){ e.classList.add('hint-glow'); setTimeout(()=>e.classList.remove('hint-glow'),900); }
+  } else if(stock.length||waste.length){
+    const s=document.getElementById('stock');
+    s.classList.add('hint-glow'); setTimeout(()=>s.classList.remove('hint-glow'),900);
+  }
+}
+function findMoves(){
+  const ms=[];
+  const srcs=[...tab.map((col,i)=>({col,t:'tab',i})),{col:waste,t:'waste',i:undefined}];
+  for(const s of srcs){
+    if(!s.col.length) continue;
+    const c=s.col[s.col.length-1];
+    for(let f=0;f<4;f++) if(canFnd(c,f)) ms.push({from:{t:s.t,i:s.i,idx:s.col.length-1}});
+    for(let t=0;t<7;t++) if((s.t!=='tab'||s.i!==t)&&canTab(c,t)) ms.push({from:{t:s.t,i:s.i,idx:s.col.length-1}});
+  }
+  return ms;
+}
+function findCardEl(from){
+  if(from.t==='waste') return document.getElementById('waste-wrap').lastElementChild;
+  if(from.t==='tab'){
+    const p=document.getElementById('tab-row').children[from.i];
+    return p?p.children[from.idx]:null;
+  }
+  return null;
+}
+
+// ============================================================
+//  オートクリア
+// ============================================================
+function checkAuto(){
+  if(isWin) return;
+  if(!tab.every(col=>col.every(c=>c.face))) return;
+  if(autoID) clearInterval(autoID);
+  autoID=setInterval(()=>{
+    let moved=false;
+    const srcs=[...tab.map((col,i)=>({col,t:'tab',i})),{col:waste,t:'waste',i:undefined}];
+    for(const s of srcs){
+      if(!s.col.length) continue;
+      const c=s.col[s.col.length-1];
+      for(let f=0;f<4;f++){
+        if(canFnd(c,f)){ doMove({t:s.t,i:s.i,idx:s.col.length-1},{t:'f',i:f},true); moved=true; break; }
+      }
+      if(moved) break;
+    }
+    if(!moved&&stock.length){
+      for(let si=stock.length-1;si>=0;si--){
+        const c=stock[si];
+        for(let f=0;f<4;f++){
+          if(canFnd(c,f)){
+            const card=stock.splice(si,1)[0]; card.face=true;
+            found[f].push(card); score+=10; render(); moved=true; break;
+          }
+        }
+        if(moved) break;
+      }
+    }
+    if(!moved&&!stock.length&&waste.length){
+      stock=waste.slice().reverse();
+      stock.forEach(c=>{ c.face=false; });
+      waste=[]; moved=true; render();
+    }
+    if(!moved&&found.reduce((s,f)=>s+f.length,0)===52){ clearInterval(autoID); win(); return; }
+    if(!moved) clearInterval(autoID);
+  }, 80);
+}
+
+// ============================================================
+//  勝利
+// ============================================================
+function win(){
+  isWin=true; clearInterval(timerID);
+  saveBestTime();
+  document.getElementById('win-stats').textContent=`Score: ${score}  Time: ${fmt(timeEl)}`;
+  document.getElementById('dlg-win').style.display='block';
+  startConfetti();
+}
+
+// ============================================================
+//  履歴
+// ============================================================
+function saveHist(){
+  history.push(JSON.stringify({stock,waste,found,tab,score,timeEl}));
+  if(history.length>HIST_MAX) history.shift();
+}
+function undo(){
+  if(!history.length) return;
+  const s=JSON.parse(history.pop());
+  stock=s.stock; waste=s.waste; found=s.found; tab=s.tab; score=s.score; timeEl=s.timeEl;
+  clearSel(); render();
+}
+
+// ============================================================
+//  ドラッグ＆ドロップ（PC）
+// ============================================================
+function onDrop(e,toType,toIdx){
+  e.preventDefault();
+  let from; try{ from=JSON.parse(e.dataTransfer.getData('text/plain')); }catch{ return; }
+  const col=getCol(from);
+  const card=from.idx!=null?col[from.idx]:col[col.length-1];
+  if(!card) return;
+  if(toType==='tab'&&canTab(card,toIdx)) doMove(from,{t:'tab',i:toIdx});
+  else if(toType==='f'&&canFnd(card,toIdx)) doMove(from,{t:'f',i:toIdx});
+}
+
+// ============================================================
+//  ユーティリティ
+// ============================================================
+function getCol(from){
+  if(from.t==='tab')   return tab[from.i];
+  if(from.t==='waste') return waste;
+  if(from.t==='f')     return found[from.i];
+  return [];
+}
+function topCard(from){
+  const col=getCol(from);
+  return from.idx!=null ? col[from.idx] : col[col.length-1];
+}
+
+// ============================================================
+//  描画
+// ============================================================
+function render(){
+  document.getElementById('score').textContent=score;
+
+  // 山札
+  const stk=document.getElementById('stock');
+  stk.innerHTML='';
+  if(stock.length){
+    const d=el('div','card back'); d.style.cssText='position:absolute;top:0;left:0;';
+    stk.appendChild(d);
+    stk.classList.remove('empty-hint');
+  } else {
+    stk.classList.add('empty-hint'); stk.dataset.hint='↻';
+  }
+
+  // 捨て札
+  const ww=document.getElementById('waste-wrap');
+  // waste-baseより後の子を全削除
+  while(ww.children.length>1) ww.removeChild(ww.lastChild);
+  const vis = drawThree ? Math.min(3,waste.length) : (waste.length?1:0);
+  const start = waste.length - vis;
+  for(let i=0;i<vis;i++){
+    const card=waste[start+i];
+    const cidx=start+i;
+    const d=makeCard(card,{t:'waste',idx:cidx});
+    // draw3ならオフセット表示
+    const offsetX = drawThree ? i*Math.floor(CARD_W*0.35) : 0;
+    d.style.left=offsetX+'px'; d.style.top='0px'; d.style.zIndex=i;
+    ww.appendChild(d);
+  }
+  // waste-wrapの幅調整
+  const wrapW = vis>1 ? CARD_W + (vis-1)*Math.floor(CARD_W*0.35) : CARD_W;
+  ww.style.width=wrapW+'px';
+
+  // 組札
+  for(let i=0;i<4;i++){
+    const f=document.getElementById('f'+i);
+    f.innerHTML='';
+    if(found[i].length){
+      f.classList.remove('empty-hint');
+      const d=makeCard(found[i][found[i].length-1],{t:'f',i});
+      d.style.cssText='position:absolute;top:0;left:0;';
+      f.appendChild(d);
+    } else {
+      f.classList.add('empty-hint'); f.dataset.hint=SUITS[i];
+    }
+  }
+
+  // 場札
+  const trow=document.getElementById('tab-row');
+  const piles=trow.children;
+  tab.forEach((col,ci)=>{
+    const pile=piles[ci]; if(!pile) return;
+    pile.innerHTML='';
+    if(!col.length){
+      pile.classList.add('empty-k');
+      pile.style.height='var(--ch)';
+      return;
+    }
+    pile.classList.remove('empty-k');
+    col.forEach((c,i)=>{
+      const d=makeCard(c,{t:'tab',i:ci,idx:i});
+      d.style.top=(i*OVERLAP_PX)+'px';
+      d.style.left='0'; d.style.zIndex=i;
+      pile.appendChild(d);
+    });
+    // pileの高さを動的に伸ばす
+    pile.style.height=((col.length-1)*OVERLAP_PX+CARD_H)+'px';
+  });
+}
+
+// ============================================================
+//  ゲーム開始
+// ============================================================
+function startGame(){
+  isWin=false;
+  if(confettiID) cancelAnimationFrame(confettiID);
+  document.getElementById('fx-canvas').style.display='none';
+  document.getElementById('dlg-win').style.display='none';
+  clearInterval(timerID); clearInterval(autoID);
+  timerID=null; autoID=null; timeEl=0; score=0;
+  document.getElementById('timer').textContent='00:00';
+  clearSel(); history=[];
+  saveBest();
+
+  // デッキ生成（52枚すべてを確実に使用）
+  let deck=[];
+  for(let s=0;s<4;s++)
+    for(let r=0;r<13;r++)
+      deck.push({suit:SUITS[s],rank:RANKS[r],value:r+1,color:COLOR[s],face:false});
+
+  // Fisher-Yatesシャッフル（確実な52枚シャッフル）
+  for(let i=deck.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [deck[i],deck[j]]=[deck[j],deck[i]];
+  }
+
+  // ── 自然なシャッフル + 良局面選択 ──────────────────────
+  // 完全ランダムで配布した結果を最大8回生成し、
+  // 序盤の手数スコアが最も高い配置を採用する。
+  // カード配置は毎回完全ランダムなので見た目は自然。
+
+  const shuffle = arr => {
+    for(let i=arr.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]]=[arr[j],arr[i]];
+    }
+    return arr;
+  };
+
+  // 1回分の標準配布を生成（deep copyしてから配布）
+  const makeDeal = (src) => {
+    const d = src.map(c=>({...c}));
+    const t = Array(7).fill(null).map(()=>[]);
+    let idx = 0;
+    for(let col=0;col<7;col++)
+      for(let row=0;row<=col;row++){
+        const card = d[idx++];
+        card.face = (row===col);
+        t[col].push(card);
+      }
+    const st = d.slice(idx).map(c=>{ c.face=false; return c; });
+    return {t, st};
+  };
+
+  // 配置スコア：序盤に動かせる手を数値化
+  const scoreDealt = (t) => {
+    let sc = 0;
+    const tops = t.map(col => col[col.length-1]);
+    // Aが表向き → すぐ組札へ置ける（高得点）
+    tops.forEach(c => { if(c.value===1) sc+=6; });
+    // 表向き同士で場札移動できるペア → 手が進む
+    for(let i=0;i<7;i++) for(let j=0;j<7;j++){
+      if(i===j) continue;
+      const s=tops[i], d=tops[j];
+      if(s.color!==d.color && s.value===d.value-1) sc+=2;
+    }
+    // Kが表向き → 空列ができたときに使える
+    tops.forEach(c => { if(c.value===13) sc+=1; });
+    // 表向きカードが連番になっている（2枚以上動かせる積み）
+    t.forEach(col => {
+      for(let i=col.length-2;i>=0;i--){
+        const upper=col[i], lower=col[i+1];
+        if(upper.face && lower.face && upper.color!==lower.color && upper.value===lower.value+1)
+          sc+=1;
+        else break;
+      }
+    });
+    return sc;
+  };
+
+  // 最大8回試行して最良の配置を選ぶ
+  let bestT=null, bestSt=null, bestSc=-1;
+  for(let attempt=0;attempt<8;attempt++){
+    shuffle(deck);
+    const {t, st} = makeDeal(deck);
+    const sc = scoreDealt(t);
+    if(sc > bestSc){ bestSc=sc; bestT=t; bestSt=st; }
+  }
+
+  tab = bestT;
+  stock = bestSt;
+  waste = []; found = [[],[],[],[]];
+  render();
+}
+
+// ============================================================
+//  紙吹雪
+// ============================================================
+let confettiID=null, confetti=[];
+function startConfetti(){
+  const cv=document.getElementById('fx-canvas');
+  cv.style.display='block';
+  cv.width=window.innerWidth; cv.height=window.innerHeight;
+  const ctx=cv.getContext('2d');
+  confetti=[];
+  function loop(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    if(Math.random()<0.18){
+      const x=Math.random()*cv.width, y=Math.random()*cv.height*0.4;
+      const hue=Math.random()*360;
+      for(let i=0;i<35;i++){
+        const a=Math.random()*Math.PI*2, spd=Math.random()*5+2;
+        confetti.push({x,y,vx:Math.cos(a)*spd,vy:Math.sin(a)*spd,life:1,hue});
+      }
+    }
+    for(let i=confetti.length-1;i>=0;i--){
+      const p=confetti[i];
+      p.x+=p.vx; p.y+=p.vy; p.vy+=0.07; p.life-=0.013;
+      ctx.fillStyle=`hsl(${p.hue},100%,55%)`;
+      ctx.globalAlpha=Math.max(0,p.life);
+      ctx.fillRect(p.x,p.y,3,3);
+      if(p.life<=0) confetti.splice(i,1);
+    }
+    ctx.globalAlpha=1;
+    confettiID=requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+// ============================================================
+//  初期化
+// ============================================================
+calcLayout();
+loadBest();
+buildDeckRow();
+buildTabRow();
+startGame();
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => console.log('SW registered'))
+      .catch(e => console.warn('SW failed:', e));
+  });
+}
+</script>
+</body>
+</html>
