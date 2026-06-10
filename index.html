@@ -28,28 +28,36 @@
   --font-suit: 12px;
   --font-large: 28px;
 }
-html, body {
-  width: 100%; height: 100%;
-  overflow: hidden;
+html {
+  height: 100%;
   background: radial-gradient(ellipse at center, #1b5e20 0%, #051a05 100%);
+  background-attachment: fixed;
+}
+body {
+  min-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* タッチスクロールを許可しつつカードのタップも受け付ける */
+  touch-action: pan-y;
   font-family: 'Helvetica Neue', sans-serif;
   color: #fff;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
-  touch-action: none;
 }
 
-/* ===== 上部バー ===== */
+/* ===== 上部バー（固定） ===== */
 #top-bar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   display: flex; justify-content: space-between; align-items: center;
-  padding: 5px 8px; background: rgba(0,0,0,0.85);
+  padding: 5px 8px; background: rgba(0,0,0,0.92);
   border-bottom: 1px solid var(--accent);
   font-size: 11px; white-space: nowrap; height: 30px;
 }
 #top-bar .hi { color: var(--accent); font-weight: bold; }
 
-/* ===== ボタン行 ===== */
+/* ===== ボタン行（固定） ===== */
 #btn-bar {
+  position: fixed; top: 30px; left: 0; right: 0; z-index: 100;
   display: grid; grid-template-columns: repeat(5,1fr);
   gap: 3px; padding: 4px 6px; background: #111; height: 36px;
 }
@@ -62,10 +70,13 @@ html, body {
 }
 #btn-bar button:active, #btn-bar button.active { background: var(--accent); color: #000; }
 
-/* ===== ゲームエリア ===== */
+/* ===== ゲームエリア（固定ヘッダー分を押し下げ） ===== */
 #game {
   padding: var(--pad);
+  padding-top: calc(30px + 36px + var(--pad));
   display: flex; flex-direction: column; gap: var(--gap);
+  /* 場札が長くなっても下までスクロールできるよう余白を追加 */
+  padding-bottom: 40px;
 }
 
 /* デッキ行・場札行：共通 */
@@ -236,6 +247,16 @@ html, body {
   <div class="dialog-btns">
     <button class="danger" onclick="doConfirmYes()">YES</button>
     <button onclick="doConfirmNo()">NO</button>
+  </div>
+</div>
+
+<!-- 詰みダイアログ -->
+<div class="dialog" id="dlg-stuck">
+  <h2 style="color:#ff6b6b;">詰みました</h2>
+  <p id="stuck-msg">これ以上手がありません。</p>
+  <div class="dialog-btns">
+    <button onclick="startGame()">NEW GAME</button>
+    <button onclick="document.getElementById('dlg-stuck').style.display='none'">閉じる</button>
   </div>
 </div>
 
@@ -493,33 +514,66 @@ function onTouchCard(from, d) {
   initAudio(); startTimer();
 
   const col = getCol(from);
+  // 捨て札は最上位のカードのみ操作可
   if (from.t==='waste' && from.idx !== waste.length-1) return;
   const card = from.idx!=null ? col[from.idx] : col[col.length-1];
-  if (!card||!card.face) return;
+  if (!card || !card.face) return;
 
-  // 選択済みなら移動先として処理
+  // 場札の中間タップ: 有効な連番グループ先頭でなければ無視
+  if (from.t==='tab' && from.idx != null && from.idx < col.length-1) {
+    if (!isValidGroup(col, from.idx)) return;
+  }
+
+  // ── 選択中カードへの移動先タップ ──
   if (selFrom) {
-    const sc = topCard(selFrom);
-    // 同じカード → 解除
+    const selCol = getCol(selFrom);
+    const selIdx = selFrom.idx != null ? selFrom.idx : selCol.length - 1;
+    const selCard = selCol[selIdx];
+
+    // 同じカードを再タップ → 選択解除
     if (selFrom.t===from.t && selFrom.i===from.i && selFrom.idx===from.idx) {
       clearSel(); return;
     }
-    if (from.t==='f' && canFnd(sc,from.i)) { clearSel(); doMove(selFrom,{t:'f',i:from.i}); return; }
-    if (from.t==='tab' && canTab(sc,from.i)) { clearSel(); doMove(selFrom,{t:'tab',i:from.i}); return; }
+
+    // 1枚のみ選択中 → 組札へ移動可能か判定
+    const selIsTop = (selFrom.t !== 'tab') || (selIdx === selCol.length - 1);
+    if (from.t === 'f' && selIsTop && canFnd(selCard, from.i)) {
+      clearSel(); doMove(selFrom, {t:'f', i:from.i}); return;
+    }
+    // 場札への移動（1枚 or 複数枚グループ）
+    if (from.t === 'tab' && canTab(selCard, from.i)) {
+      clearSel(); doMove(selFrom, {t:'tab', i:from.i}); return;
+    }
+    // 移動不可 → 選択を切り替え
     clearSel();
   }
-  // 新規選択 → 即自動移動を試みる
-  selFrom=from; selEl=d; d.classList.add('selected');
+
+  // ── 新規選択 → 即時自動移動を試みる ──
+  selFrom = from; selEl = d; d.classList.add('selected');
   autoMove(from, card);
 }
 
-// 組札優先 → 場札
+// 場札のidxからcol末尾まで、表向き連番グループかどうか確認
+function isValidGroup(col, idx) {
+  for (let i = idx; i < col.length; i++) {
+    if (!col[i].face) return false;
+    if (i > idx) {
+      const upper = col[i-1], lower = col[i];
+      if (upper.color === lower.color || upper.value !== lower.value+1) return false;
+    }
+  }
+  return true;
+}
+
+// 組札優先 → 場札（タッチ: 複数枚グループも対応）
 function autoMove(from, card) {
   const col=getCol(from);
   const isTop = (from.idx==null || from.idx===col.length-1);
+  // 1枚のみ: 組札優先
   if (from.t!=='f' && isTop) {
     for(let i=0;i<4;i++) if(canFnd(card,i)){ clearSel(); doMove(from,{t:'f',i}); return; }
   }
+  // 場札移動（複数枚グループでも可）
   for(let i=0;i<7;i++){
     if(from.t==='tab'&&from.i===i) continue;
     if(canTab(card,i)){ clearSel(); doMove(from,{t:'tab',i}); return; }
@@ -552,6 +606,8 @@ function drawCard() {
     beep(440,0.06);
   }
   render();
+  // 山札を全部引き切った後に詰みになる場合を検出
+  if (!stock.length && !waste.length) checkStuck();
 }
 
 // ============================================================
@@ -575,7 +631,7 @@ function doMove(from, to, silent=false) {
     if(!last.face){ last.face=true; score+=5; if(!silent) beep(900,0.06,0.08); }
   }
   render(); saveBest();
-  if(!silent) checkAuto();
+  if(!silent){ checkAuto(); checkStuck(); }
 }
 
 // ============================================================
@@ -615,8 +671,46 @@ function findMoves(){
     const c=s.col[s.col.length-1];
     for(let f=0;f<4;f++) if(canFnd(c,f)) ms.push({from:{t:s.t,i:s.i,idx:s.col.length-1}});
     for(let t=0;t<7;t++) if((s.t!=='tab'||s.i!==t)&&canTab(c,t)) ms.push({from:{t:s.t,i:s.i,idx:s.col.length-1}});
+    // 場札: 複数枚グループの移動も候補に
+    if(s.t==='tab'){
+      for(let gi=s.col.length-2;gi>=0;gi--){
+        if(!isValidGroup(s.col,gi)) break;
+        const gc=s.col[gi];
+        for(let t=0;t<7;t++) if(t!==s.i&&canTab(gc,t)) ms.push({from:{t:'tab',i:s.i,idx:gi}});
+      }
+    }
   }
   return ms;
+}
+
+// 詰み検出: 場札・捨て札を含めて手が全くないか判定
+function isStuck() {
+  if (isWin) return false;
+  // 場札・捨て札に動かせる手がある → 詰みではない
+  if (findMoves().length) return false;
+  // 山札にまだカードがある → 引ける手がある
+  if (stock.length) return false;
+  // 捨て札の最上位が場札・組札に置ける → 詰みではない
+  // （findMovesがwaste末尾を対象にしているので上のfindMoves()で検出済み）
+  // 捨て札を山札に戻せる → まだ引ける（draw1の場合は無限ループになるが一応続行可能）
+  if (waste.length) return false;
+  return true;
+}
+
+// 詰みチェックを doMove / drawCard 後に呼ぶ
+function checkStuck() {
+  if (isWin) return;
+  if (!isStuck()) return;
+  setTimeout(() => {
+    if (!isWin && !document.getElementById('dlg-stuck').style.display.match('block')) {
+      // 詰んだ時点のスコアと手数をメッセージに含める
+      const total = stock.length + waste.length + tab.reduce((s,c)=>s+c.length,0);
+      const cleared = 52 - total - found.reduce((s,f)=>s+f.length,0);
+      document.getElementById('stuck-msg').textContent =
+        `これ以上手がありません。組札: ${found.reduce((s,f)=>s+f.length,0)} / 52 枚`;
+      document.getElementById('dlg-stuck').style.display = 'block';
+    }
+  }, 500);
 }
 function findCardEl(from){
   if(from.t==='waste') return document.getElementById('waste-wrap').lastElementChild;
