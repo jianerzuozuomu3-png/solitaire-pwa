@@ -54,6 +54,29 @@ body {
   font-size: 11px; white-space: nowrap; height: 30px;
 }
 #top-bar .hi { color: var(--accent); font-weight: bold; }
+#btn-bgm {
+  background: #222; color: #ddd; border: 1px solid #3a3a3a;
+  border-radius: 6px; font-size: 14px; padding: 2px 8px;
+  cursor: pointer; flex-shrink: 0; margin-left: 6px;
+}
+#btn-bgm.playing { background: var(--accent); color: #000; }
+
+/* BGM音量パネル（ポップオーバー） */
+#bgm-panel {
+  display: none; position: fixed; top: 32px; right: 8px; z-index: 150;
+  background: rgba(10,15,10,0.97); border: 1px solid var(--accent);
+  border-radius: 10px; padding: 10px 12px; min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+#bgm-panel.open { display: block; }
+.bgm-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.bgm-label { font-size: 13px; }
+#bgm-toggle {
+  width: 100%; background: #2a2a2a; color: #fff; border: 1px solid #3a3a3a;
+  border-radius: 6px; padding: 6px 0; font-size: 12px; cursor: pointer;
+}
+#bgm-toggle.playing { background: var(--accent); color: #000; }
+#bgm-volume { flex: 1; }
 
 /* ===== ボタン行（固定） ===== */
 #btn-bar {
@@ -215,6 +238,19 @@ body {
 <div id="top-bar">
   <div>SCORE: <span id="score" class="hi">0</span> &nbsp;BEST: <span id="best-score" class="hi">0</span></div>
   <div>TIME: <span id="timer">00:00</span> &nbsp;BEST: <span id="best-time" class="hi">--:--</span></div>
+  <button id="btn-bgm" onclick="toggleBgmPanel()" aria-label="BGM設定">🎵</button>
+</div>
+
+<!-- BGM音量パネル -->
+<div id="bgm-panel">
+  <div class="bgm-row">
+    <button id="bgm-toggle" onclick="toggleBgm()">▶ 再生</button>
+  </div>
+  <div class="bgm-row">
+    <span class="bgm-label">🔈</span>
+    <input type="range" id="bgm-volume" min="0" max="100" value="40" oninput="setBgmVolume(this.value)">
+    <span class="bgm-label">🔊</span>
+  </div>
 </div>
 
 <!-- ボタン -->
@@ -261,6 +297,7 @@ body {
 </div>
 
 <canvas id="fx-canvas"></canvas>
+<audio id="bgm-audio" src="audio/bgm.ogg" loop preload="auto"></audio>
 
 <script>
 'use strict';
@@ -327,6 +364,110 @@ function beep(freq, dur, vol=0.06) {
   o.connect(g); g.connect(audioCtx.destination);
   o.start(); o.stop(audioCtx.currentTime+dur);
 }
+
+// 勝利ファンファーレ（明るい上昇アルペジオ）を自動生成
+function playFanfare() {
+  initAudio();
+  if (!audioCtx) return;
+  // ド・ミ・ソ・ド（メジャーコードの上昇アルペジオ）を2回、最後に高いドで締める
+  const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51]; // C5,E5,G5,C6,E6
+  const step = 0.11;
+  notes.forEach((freq, i) => {
+    const start = audioCtx.currentTime + i * step;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.linearRampToValueAtTime(0.18, start + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(start); o.stop(start + 0.55);
+  });
+  // 最後にきらめく和音
+  const chordStart = audioCtx.currentTime + notes.length * step + 0.05;
+  [523.25, 659.25, 783.99, 1046.50].forEach(freq => {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, chordStart);
+    g.gain.linearRampToValueAtTime(0.14, chordStart + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, chordStart + 1.2);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(chordStart); o.stop(chordStart + 1.2);
+  });
+}
+
+// ============================================================
+//  BGM（背景音楽）
+// ============================================================
+const bgmAudio = document.getElementById('bgm-audio');
+let bgmPlaying = false;
+let bgmStarted = false; // ユーザー操作前のautoplay制限対策
+
+function loadBgmPrefs() {
+  const vol = localStorage.getItem('sol_bgm_vol');
+  const v = vol !== null ? parseInt(vol, 10) : 40;
+  bgmAudio.volume = v / 100;
+  document.getElementById('bgm-volume').value = v;
+  const wasOn = localStorage.getItem('sol_bgm_on') === '1';
+  if (wasOn) {
+    // 実際の再生はユーザー操作（タップ）後に開始する
+    bgmPlaying = true;
+    updateBgmButtons();
+  }
+}
+
+function toggleBgmPanel() {
+  document.getElementById('bgm-panel').classList.toggle('open');
+}
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('bgm-panel');
+  const btn = document.getElementById('btn-bgm');
+  if (panel.classList.contains('open') && !panel.contains(e.target) && e.target !== btn) {
+    panel.classList.remove('open');
+  }
+});
+
+function toggleBgm() {
+  if (bgmPlaying) {
+    bgmAudio.pause();
+    bgmPlaying = false;
+  } else {
+    bgmAudio.play().catch(()=>{ /* ユーザー操作が必要な場合は無視 */ });
+    bgmPlaying = true;
+    bgmStarted = true;
+  }
+  localStorage.setItem('sol_bgm_on', bgmPlaying ? '1' : '0');
+  updateBgmButtons();
+}
+
+function setBgmVolume(v) {
+  bgmAudio.volume = v / 100;
+  localStorage.setItem('sol_bgm_vol', v);
+}
+
+function updateBgmButtons() {
+  const btn = document.getElementById('btn-bgm');
+  const toggleBtn = document.getElementById('bgm-toggle');
+  btn.classList.toggle('playing', bgmPlaying);
+  toggleBtn.classList.toggle('playing', bgmPlaying);
+  toggleBtn.textContent = bgmPlaying ? '⏸ 停止' : '▶ 再生';
+}
+
+// 初回タップで自動再生を解禁（iOS/Android対策）
+function unlockBgmOnFirstTouch() {
+  if (bgmStarted) return;
+  bgmStarted = true;
+  if (bgmPlaying) {
+    bgmAudio.play().catch(()=>{});
+  }
+  document.removeEventListener('touchstart', unlockBgmOnFirstTouch);
+  document.removeEventListener('click', unlockBgmOnFirstTouch);
+}
+document.addEventListener('touchstart', unlockBgmOnFirstTouch, {once:true, passive:true});
+document.addEventListener('click', unlockBgmOnFirstTouch, {once:true});
 
 // ============================================================
 //  タイマー
@@ -770,6 +911,7 @@ function win(){
   document.getElementById('win-stats').textContent=`Score: ${score}  Time: ${fmt(timeEl)}`;
   document.getElementById('dlg-win').style.display='block';
   startConfetti();
+  playFanfare();
 }
 
 // ============================================================
@@ -912,71 +1054,18 @@ function startGame(){
     [deck[i],deck[j]]=[deck[j],deck[i]];
   }
 
-  // ── 自然なシャッフル + 良局面選択 ──────────────────────
-  // 完全ランダムで配布した結果を最大8回生成し、
-  // 序盤の手数スコアが最も高い配置を採用する。
-  // カード配置は毎回完全ランダムなので見た目は自然。
-
-  const shuffle = arr => {
-    for(let i=arr.length-1;i>0;i--){
-      const j=Math.floor(Math.random()*(i+1));
-      [arr[i],arr[j]]=[arr[j],arr[i]];
+  // ── シンプルな配布（標準ソリティアと同じ、試行・選別なし） ──
+  // 列iにi+1枚配り、一番上だけ表向き。完全ランダム1回。
+  tab = Array(7).fill(null).map(() => []);
+  let idx = 0;
+  for(let col=0; col<7; col++){
+    for(let row=0; row<=col; row++){
+      const card = deck[idx++];
+      card.face = (row === col);
+      tab[col].push(card);
     }
-    return arr;
-  };
-
-  // 1回分の標準配布を生成（deep copyしてから配布）
-  const makeDeal = (src) => {
-    const d = src.map(c=>({...c}));
-    const t = Array(7).fill(null).map(()=>[]);
-    let idx = 0;
-    for(let col=0;col<7;col++)
-      for(let row=0;row<=col;row++){
-        const card = d[idx++];
-        card.face = (row===col);
-        t[col].push(card);
-      }
-    const st = d.slice(idx).map(c=>{ c.face=false; return c; });
-    return {t, st};
-  };
-
-  // 配置スコア：序盤に動かせる手を数値化
-  const scoreDealt = (t) => {
-    let sc = 0;
-    const tops = t.map(col => col[col.length-1]);
-    // Aが表向き → すぐ組札へ置ける（高得点）
-    tops.forEach(c => { if(c.value===1) sc+=6; });
-    // 表向き同士で場札移動できるペア → 手が進む
-    for(let i=0;i<7;i++) for(let j=0;j<7;j++){
-      if(i===j) continue;
-      const s=tops[i], d=tops[j];
-      if(s.color!==d.color && s.value===d.value-1) sc+=2;
-    }
-    // Kが表向き → 空列ができたときに使える
-    tops.forEach(c => { if(c.value===13) sc+=1; });
-    // 表向きカードが連番になっている（2枚以上動かせる積み）
-    t.forEach(col => {
-      for(let i=col.length-2;i>=0;i--){
-        const upper=col[i], lower=col[i+1];
-        if(upper.face && lower.face && upper.color!==lower.color && upper.value===lower.value+1)
-          sc+=1;
-        else break;
-      }
-    });
-    return sc;
-  };
-
-  // 最大8回試行して最良の配置を選ぶ
-  let bestT=null, bestSt=null, bestSc=-1;
-  for(let attempt=0;attempt<8;attempt++){
-    shuffle(deck);
-    const {t, st} = makeDeal(deck);
-    const sc = scoreDealt(t);
-    if(sc > bestSc){ bestSc=sc; bestT=t; bestSt=st; }
   }
-
-  tab = bestT;
-  stock = bestSt;
+  stock = deck.slice(idx);
   waste = []; found = [[],[],[],[]];
   render();
 }
@@ -1020,6 +1109,7 @@ function startConfetti(){
 // ============================================================
 calcLayout();
 loadBest();
+loadBgmPrefs();
 buildDeckRow();
 buildTabRow();
 startGame();

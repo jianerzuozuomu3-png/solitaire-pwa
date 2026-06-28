@@ -1,9 +1,10 @@
-const CACHE = 'solitaire-v1';
+const CACHE = 'solitaire-v2';
 const FILES = [
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/icon-512.png',
+  './audio/bgm.ogg'
 ];
 
 // インストール時：必要ファイルをキャッシュ
