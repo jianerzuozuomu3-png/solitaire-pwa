@@ -16,7 +16,6 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
   --accent: #00ffcc;
-  --bg-dark: #051a05;
   /* カード幅: 7列が隙間込みで画面幅に収まる値をJSで計算してセット */
   --cw: 44px;
   --ch: 66px; /* 縦横比 3:2 でJSが更新 */
@@ -291,8 +290,8 @@ body {
   <h2 style="color:#ff6b6b;">詰みました</h2>
   <p id="stuck-msg">これ以上手がありません。</p>
   <div class="dialog-btns">
-    <button onclick="startGame()">NEW GAME</button>
-    <button onclick="document.getElementById('dlg-stuck').style.display='none'">閉じる</button>
+    <button class="danger" onclick="startGame()">NEW GAME</button>
+    <button onclick="document.getElementById('dlg-stuck').style.display='none';stuckShown=false;">閉じる</button>
   </div>
 </div>
 
@@ -316,7 +315,7 @@ const HIST_MAX = 30;
 let stock=[], waste=[], found=[[],[],[],[]], tab=[[],[],[],[],[],[],[]];
 let drawThree=false, deckLeft=true;
 let score=0, timeEl=0, timerID=null, autoID=null;
-let isWin=false, history=[];
+let isWin=false, history=[], stuckShown=false;
 let selFrom=null, selEl=null; // タッチ選択
 
 // ============================================================
@@ -463,8 +462,6 @@ function unlockBgmOnFirstTouch() {
   if (bgmPlaying) {
     bgmAudio.play().catch(()=>{});
   }
-  document.removeEventListener('touchstart', unlockBgmOnFirstTouch);
-  document.removeEventListener('click', unlockBgmOnFirstTouch);
 }
 document.addEventListener('touchstart', unlockBgmOnFirstTouch, {once:true, passive:true});
 document.addEventListener('click', unlockBgmOnFirstTouch, {once:true});
@@ -498,6 +495,7 @@ function loadBest() {
   document.getElementById('best-time').textContent = t ? fmt(parseInt(t,10)) : '--:--';
 }
 function saveBestTime() {
+  if (timeEl < 30) return; // 30秒未満はベストタイム対象外
   const t = localStorage.getItem('sol_best_time');
   if (!t || timeEl < parseInt(t,10)) {
     localStorage.setItem('sol_best_time', timeEl);
@@ -546,8 +544,6 @@ function buildDeckRow() {
 
   // 捨て札ラッパー
   const ww = el('div'); ww.id='waste-wrap';
-  const wb = el('div','pile'); wb.id='waste-base';
-  ww.appendChild(wb);
 
   const sp = el('div','spacer');
 
@@ -712,12 +708,12 @@ function autoMove(from, card) {
   const isTop = (from.idx==null || from.idx===col.length-1);
   // 1枚のみ: 組札優先
   if (from.t!=='f' && isTop) {
-    for(let i=0;i<4;i++) if(canFnd(card,i)){ clearSel(); doMove(from,{t:'f',i}); return; }
+    for(let i=0;i<4;i++) if(canFnd(card,i)){ doMove(from,{t:'f',i}); clearSel(); return; }
   }
   // 場札移動（複数枚グループでも可）
   for(let i=0;i<7;i++){
     if(from.t==='tab'&&from.i===i) continue;
-    if(canTab(card,i)){ clearSel(); doMove(from,{t:'tab',i}); return; }
+    if(canTab(card,i)){ doMove(from,{t:'tab',i}); clearSel(); return; }
   }
   // 自動移動できない場合は選択状態を維持
 }
@@ -763,7 +759,7 @@ function doMove(from, to, silent=false) {
 
   if(to.t==='tab'){
     tab[to.i].push(...cards);
-    score += from.t==='f'?-10:5;
+    score = Math.max(0, score + (from.t==='f' ? -10 : 5));
   } else {
     cards[0].face=true; found[to.i].push(cards[0]); score+=10;
   }
@@ -840,13 +836,11 @@ function isStuck() {
 
 // 詰みチェックを doMove / drawCard 後に呼ぶ
 function checkStuck() {
-  if (isWin) return;
+  if (isWin || stuckShown) return;
   if (!isStuck()) return;
+  stuckShown = true;
   setTimeout(() => {
-    if (!isWin && !document.getElementById('dlg-stuck').style.display.match('block')) {
-      // 詰んだ時点のスコアと手数をメッセージに含める
-      const total = stock.length + waste.length + tab.reduce((s,c)=>s+c.length,0);
-      const cleared = 52 - total - found.reduce((s,f)=>s+f.length,0);
+    if (!isWin) {
       document.getElementById('stuck-msg').textContent =
         `これ以上手がありません。組札: ${found.reduce((s,f)=>s+f.length,0)} / 52 枚`;
       document.getElementById('dlg-stuck').style.display = 'block';
@@ -925,6 +919,10 @@ function undo(){
   if(!history.length) return;
   const s=JSON.parse(history.pop());
   stock=s.stock; waste=s.waste; found=s.found; tab=s.tab; score=s.score; timeEl=s.timeEl;
+  // タイマーを復元した時刻から再起動
+  clearInterval(timerID); timerID=null;
+  document.getElementById('timer').textContent = fmt(timeEl);
+  if(timeEl > 0 && !isWin) startTimer();
   clearSel(); render();
 }
 
@@ -974,8 +972,8 @@ function render(){
 
   // 捨て札
   const ww=document.getElementById('waste-wrap');
-  // waste-baseより後の子を全削除
-  while(ww.children.length>1) ww.removeChild(ww.lastChild);
+  // 既存カードをすべて削除
+  ww.innerHTML = '';
   const vis = drawThree ? Math.min(3,waste.length) : (waste.length?1:0);
   const start = waste.length - vis;
   for(let i=0;i<vis;i++){
@@ -1036,6 +1034,8 @@ function startGame(){
   if(confettiID) cancelAnimationFrame(confettiID);
   document.getElementById('fx-canvas').style.display='none';
   document.getElementById('dlg-win').style.display='none';
+  document.getElementById('dlg-stuck').style.display='none';
+  stuckShown = false;
   clearInterval(timerID); clearInterval(autoID);
   timerID=null; autoID=null; timeEl=0; score=0;
   document.getElementById('timer').textContent='00:00';
