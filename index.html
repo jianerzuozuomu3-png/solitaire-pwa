@@ -296,6 +296,16 @@ body {
 </div>
 
 <canvas id="fx-canvas"></canvas>
+
+<!-- 続きから再開ダイアログ -->
+<div class="dialog" id="dlg-resume">
+  <h2 style="color:var(--accent);">続きから？</h2>
+  <p id="resume-msg">前回の途中のゲームがあります。</p>
+  <div class="dialog-btns">
+    <button onclick="resumeGame()">続きから</button>
+    <button class="danger" onclick="discardResume()">新しいゲーム</button>
+  </div>
+</div>
 <audio id="bgm-audio" src="audio/bgm.ogg" loop preload="auto"></audio>
 
 <script>
@@ -743,6 +753,7 @@ function drawCard() {
     beep(440,0.06);
   }
   render();
+  saveGameState();
   // 山札を全部引き切った後に詰みになる場合を検出
   if (!stock.length && !waste.length) checkStuck();
 }
@@ -768,7 +779,7 @@ function doMove(from, to, silent=false) {
     if(!last.face){ last.face=true; score+=5; if(!silent) beep(900,0.06,0.08); }
   }
   render(); saveBest();
-  if(!silent){ checkAuto(); checkStuck(); }
+  if(!silent){ saveGameState(); checkAuto(); checkStuck(); }
 }
 
 // ============================================================
@@ -901,6 +912,7 @@ function checkAuto(){
 // ============================================================
 function win(){
   isWin=true; clearInterval(timerID);
+  clearGameState();
   saveBestTime();
   document.getElementById('win-stats').textContent=`Score: ${score}  Time: ${fmt(timeEl)}`;
   document.getElementById('dlg-win').style.display='block';
@@ -924,6 +936,7 @@ function undo(){
   document.getElementById('timer').textContent = fmt(timeEl);
   if(timeEl > 0 && !isWin) startTimer();
   clearSel(); render();
+  saveGameState();
 }
 
 // ============================================================
@@ -1027,6 +1040,78 @@ function render(){
 }
 
 // ============================================================
+//  ゲーム中断・再開
+// ============================================================
+const SAVE_KEY = 'sol_save';
+
+function saveGameState() {
+  if (isWin) return;
+  if (timeEl === 0) return;
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      stock, waste, found, tab, score, timeEl, drawThree, deckLeft
+    }));
+  } catch(e) {}
+}
+
+function clearGameState() {
+  localStorage.removeItem(SAVE_KEY);
+}
+
+function checkResume() {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (!raw) { startGame(); return; }
+  try {
+    const s = JSON.parse(raw);
+    if (!s.tab || !s.stock || !s.found || !s.waste) throw new Error();
+    const total = s.tab.reduce((n,c)=>n+c.length,0)
+      + s.stock.length + s.waste.length
+      + s.found.reduce((n,f)=>n+f.length,0);
+    if (total !== 52) throw new Error();
+    const foundCount = s.found.reduce((n,f)=>n+f.length,0);
+    document.getElementById('resume-msg').textContent =
+      `前回の続き（組札 ${foundCount}/52枚・${fmt(s.timeEl)}経過）があります。`;
+    document.getElementById('dlg-resume').style.display = 'block';
+  } catch(e) {
+    clearGameState(); startGame();
+  }
+}
+
+function resumeGame() {
+  const raw = localStorage.getItem(SAVE_KEY);
+  if (!raw) { startGame(); return; }
+  try {
+    const s = JSON.parse(raw);
+    document.getElementById('dlg-resume').style.display = 'none';
+    isWin = false; stuckShown = false;
+    stock=s.stock; waste=s.waste; found=s.found; tab=s.tab;
+    score=s.score; timeEl=s.timeEl;
+    if (s.drawThree !== undefined) {
+      drawThree = s.drawThree;
+      document.getElementById('btn-draw').textContent = drawThree ? 'DRAW:3' : 'DRAW:1';
+    }
+    if (s.deckLeft !== undefined) {
+      deckLeft = s.deckLeft;
+      document.getElementById('btn-side').textContent = deckLeft ? '山札:左' : '山札:右';
+    }
+    clearSel(); history = [];
+    document.getElementById('score').textContent = score;
+    document.getElementById('timer').textContent = fmt(timeEl);
+    buildDeckRow();
+    render();
+    startTimer();
+  } catch(e) {
+    clearGameState(); startGame();
+  }
+}
+
+function discardResume() {
+  document.getElementById('dlg-resume').style.display = 'none';
+  clearGameState();
+  startGame();
+}
+
+// ============================================================
 //  ゲーム開始
 // ============================================================
 function startGame(){
@@ -1041,6 +1126,7 @@ function startGame(){
   document.getElementById('timer').textContent='00:00';
   clearSel(); history=[];
   saveBest();
+  clearGameState();
 
   // デッキ生成（52枚すべてを確実に使用）
   let deck=[];
@@ -1112,7 +1198,7 @@ loadBest();
 loadBgmPrefs();
 buildDeckRow();
 buildTabRow();
-startGame();
+checkResume();
 </script>
 
 <script>
