@@ -361,51 +361,85 @@ window.addEventListener('resize', () => { calcLayout(); render(); });
 //  オーディオ
 // ============================================================
 let audioCtx=null;
+
 function initAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // suspended状態（iOS/Androidのバックグラウンド後など）なら即resume
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(()=>{});
+  }
 }
+
 function beep(freq, dur, vol=0.06) {
   if (!audioCtx) return;
-  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-  o.type='sine'; o.frequency.value=freq;
-  g.gain.setValueAtTime(vol, audioCtx.currentTime);
-  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+dur);
-  o.connect(g); g.connect(audioCtx.destination);
-  o.start(); o.stop(audioCtx.currentTime+dur);
+  // suspended状態のまま鳴らさない
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().then(() => _beepPlay(freq, dur, vol)).catch(()=>{});
+    return;
+  }
+  _beepPlay(freq, dur, vol);
 }
+
+function _beepPlay(freq, dur, vol) {
+  try {
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='sine'; o.frequency.value=freq;
+    g.gain.setValueAtTime(vol, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime+dur);
+  } catch(e) {}
+}
+
+// バックグラウンドから復帰したとき AudioContext を自動再開
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(()=>{});
+  }
+});
 
 // 勝利ファンファーレ（明るい上昇アルペジオ）を自動生成
 function playFanfare() {
   initAudio();
   if (!audioCtx) return;
-  // ド・ミ・ソ・ド（メジャーコードの上昇アルペジオ）を2回、最後に高いドで締める
-  const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51]; // C5,E5,G5,C6,E6
-  const step = 0.11;
-  notes.forEach((freq, i) => {
-    const start = audioCtx.currentTime + i * step;
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.type = 'triangle';
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, start);
-    g.gain.linearRampToValueAtTime(0.18, start + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(start); o.stop(start + 0.55);
-  });
-  // 最後にきらめく和音
-  const chordStart = audioCtx.currentTime + notes.length * step + 0.05;
-  [523.25, 659.25, 783.99, 1046.50].forEach(freq => {
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.type = 'triangle';
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(0.0001, chordStart);
-    g.gain.linearRampToValueAtTime(0.14, chordStart + 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, chordStart + 1.2);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(chordStart); o.stop(chordStart + 1.2);
-  });
+  // suspended状態なら resume してから再生
+  const doPlay = () => {
+    try {
+      const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51];
+      const step = 0.11;
+      notes.forEach((freq, i) => {
+        const start = audioCtx.currentTime + i * step;
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = 'triangle';
+        o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.linearRampToValueAtTime(0.18, start + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + 0.5);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(start); o.stop(start + 0.55);
+      });
+      const chordStart = audioCtx.currentTime + notes.length * step + 0.05;
+      [523.25, 659.25, 783.99, 1046.50].forEach(freq => {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = 'triangle';
+        o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, chordStart);
+        g.gain.linearRampToValueAtTime(0.14, chordStart + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, chordStart + 1.2);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(chordStart); o.stop(chordStart + 1.2);
+      });
+    } catch(e) {}
+  };
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().then(doPlay).catch(()=>{});
+  } else {
+    doPlay();
+  }
 }
 
 // ============================================================
