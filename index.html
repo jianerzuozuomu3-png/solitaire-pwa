@@ -496,16 +496,18 @@ function updateBgmButtons() {
   toggleBtn.textContent = bgmPlaying ? '⏸ 停止' : '▶ 再生';
 }
 
-// 初回タップで自動再生を解禁（iOS/Android対策）
-function unlockBgmOnFirstTouch() {
+// 初回タップで BGM・効果音の両方を一括アンロック（iOS/Android対策）
+function unlockAudioOnFirstInteraction() {
   if (bgmStarted) return;
   bgmStarted = true;
+  // AudioContext も同時にアンロック
+  initAudio().catch(()=>{});
   if (bgmPlaying) {
     bgmAudio.play().catch(()=>{});
   }
 }
-document.addEventListener('touchstart', unlockBgmOnFirstTouch, {once:true, passive:true});
-document.addEventListener('click', unlockBgmOnFirstTouch, {once:true});
+document.addEventListener('touchstart', unlockAudioOnFirstInteraction, {once:true, passive:true});
+document.addEventListener('click', unlockAudioOnFirstInteraction, {once:true});
 
 // ============================================================
 //  タイマー
@@ -548,6 +550,10 @@ function saveBestTime() {
 //  UIボタン操作
 // ============================================================
 function toggleDraw() {
+  if (timeEl > 0 && !isWin) {
+    // ゲーム中は確認してからモード変更
+    if (!confirm('DRAWモードを変更するとゲームがリセットされます。よろしいですか？')) return;
+  }
   drawThree = !drawThree;
   document.getElementById('btn-draw').textContent = drawThree ? 'DRAW:3' : 'DRAW:1';
   startGame();
@@ -716,11 +722,11 @@ async function onTouchCard(from, d) {
     // 1枚のみ選択中 → 組札へ移動可能か判定
     const selIsTop = (selFrom.t !== 'tab') || (selIdx === selCol.length - 1);
     if (from.t === 'f' && selIsTop && canFnd(selCard, from.i)) {
-      clearSel(); doMove(selFrom, {t:'f', i:from.i}); return;
+      doMove(selFrom, {t:'f', i:from.i}); clearSel(); return;
     }
     // 場札への移動（1枚 or 複数枚グループ）
     if (from.t === 'tab' && canTab(selCard, from.i)) {
-      clearSel(); doMove(selFrom, {t:'tab', i:from.i}); return;
+      doMove(selFrom, {t:'tab', i:from.i}); clearSel(); return;
     }
     // 移動不可 → 選択を切り替え
     clearSel();
@@ -810,7 +816,12 @@ function doMove(from, to, silent=false) {
     if(!last.face){ last.face=true; score+=5; if(!silent) beep(900,0.06,0.08); }
   }
   render(); saveBest();
-  if(!silent){ saveGameState(); checkAuto(); checkStuck(); }
+  if(!silent){
+    saveGameState();
+    if(tab.every(col=>col.every(c=>c.face))) checkAuto();
+    checkStuck();
+  }
+  // silent=true（オートクリア中）は保存・詰みチェック不要
 }
 
 // ============================================================
@@ -837,9 +848,12 @@ function showHint(){
     const m=moves[Math.floor(Math.random()*moves.length)];
     const e=findCardEl(m.from);
     if(e){ e.classList.add('hint-glow'); setTimeout(()=>e.classList.remove('hint-glow'),900); }
-  } else if(stock.length||waste.length){
-    const s=document.getElementById('stock');
-    s.classList.add('hint-glow'); setTimeout(()=>s.classList.remove('hint-glow'),900);
+  } else if(stock.length || waste.length){
+    // 山札が空なら捨て札リセットを促す、あれば山札をハイライト
+    const target = stock.length
+      ? document.getElementById('stock')
+      : document.getElementById('waste-wrap');
+    if(target){ target.classList.add('hint-glow'); setTimeout(()=>target.classList.remove('hint-glow'),900); }
   }
 }
 function findMoves(){
@@ -966,6 +980,7 @@ function undo(){
   clearInterval(timerID); timerID=null;
   document.getElementById('timer').textContent = fmt(timeEl);
   if(timeEl > 0 && !isWin) startTimer();
+  stuckShown = false;
   clearSel(); render();
   saveGameState();
 }
@@ -1114,6 +1129,8 @@ function resumeGame() {
   try {
     const s = JSON.parse(raw);
     document.getElementById('dlg-resume').style.display = 'none';
+    document.getElementById('dlg-confirm').style.display = 'none';
+    document.getElementById('dlg-stuck').style.display = 'none';
     isWin = false; stuckShown = false;
     stock=s.stock; waste=s.waste; found=s.found; tab=s.tab;
     score=s.score; timeEl=s.timeEl;
@@ -1148,6 +1165,7 @@ function discardResume() {
 function startGame(){
   isWin=false;
   if(confettiID) cancelAnimationFrame(confettiID);
+  confetti = []; // 紙吹雪配列をリセット
   document.getElementById('fx-canvas').style.display='none';
   document.getElementById('dlg-win').style.display='none';
   document.getElementById('dlg-stuck').style.display='none';
@@ -1233,6 +1251,7 @@ checkResume();
 </script>
 
 <script>
+'use strict';
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js')
