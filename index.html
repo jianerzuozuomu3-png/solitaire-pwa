@@ -360,51 +360,52 @@ window.addEventListener('resize', () => { calcLayout(); render(); });
 // ============================================================
 //  オーディオ
 // ============================================================
-let audioCtx=null;
+let audioCtx = null;
+let audioReady = false; // AudioContextがrunning状態かどうか
 
+// AudioContextを初期化してrunning状態にする（Promise返却）
 function initAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  // suspended状態（iOS/Androidのバックグラウンド後など）なら即resume
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(()=>{});
-  }
+  return new Promise((resolve) => {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'running') {
+      audioReady = true;
+      resolve();
+    } else {
+      audioCtx.resume().then(() => {
+        audioReady = true;
+        resolve();
+      }).catch(() => resolve()); // エラーでも処理を止めない
+    }
+  });
 }
 
+// 音を鳴らす（AudioContextがrunningでなければ無音で無視）
 function beep(freq, dur, vol=0.06) {
-  if (!audioCtx) return;
-  // suspended状態のまま鳴らさない
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume().then(() => _beepPlay(freq, dur, vol)).catch(()=>{});
-    return;
-  }
-  _beepPlay(freq, dur, vol);
-}
-
-function _beepPlay(freq, dur, vol) {
+  if (!audioCtx || !audioReady) return;
+  if (audioCtx.state !== 'running') return;
   try {
-    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
-    o.type='sine'; o.frequency.value=freq;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = freq;
     g.gain.setValueAtTime(vol, audioCtx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime+dur);
+    g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
     o.connect(g); g.connect(audioCtx.destination);
-    o.start(); o.stop(audioCtx.currentTime+dur);
+    o.start(); o.stop(audioCtx.currentTime + dur);
   } catch(e) {}
 }
 
 // バックグラウンドから復帰したとき AudioContext を自動再開
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && audioCtx && audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(()=>{});
+    audioCtx.resume().then(() => { audioReady = true; }).catch(()=>{});
   }
 });
 
 // 勝利ファンファーレ（明るい上昇アルペジオ）を自動生成
-function playFanfare() {
-  initAudio();
+async function playFanfare() {
+  await initAudio();
   if (!audioCtx) return;
-  // suspended状態なら resume してから再生
   const doPlay = () => {
     try {
       const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51];
@@ -435,11 +436,7 @@ function playFanfare() {
       });
     } catch(e) {}
   };
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume().then(doPlay).catch(()=>{});
-  } else {
-    doPlay();
-  }
+  doPlay();
 }
 
 // ============================================================
@@ -680,9 +677,9 @@ function makeCard(card, from) {
 // ============================================================
 //  クリック・タッチ操作
 // ============================================================
-function onCardClick(from) {
+async function onCardClick(from) {
   if (isWin) return;
-  initAudio(); startTimer();
+  await initAudio(); startTimer();
   const col = getCol(from);
   if (from.t==='waste' && from.idx !== waste.length-1) return;
   const card = from.idx!=null ? col[from.idx] : col[col.length-1];
@@ -690,9 +687,9 @@ function onCardClick(from) {
   autoMove(from, card);
 }
 
-function onTouchCard(from, d) {
+async function onTouchCard(from, d) {
   if (isWin) return;
-  initAudio(); startTimer();
+  await initAudio(); startTimer();
 
   const col = getCol(from);
   // 捨て札は最上位のカードのみ操作可
@@ -770,9 +767,9 @@ function clearSel() {
 // ============================================================
 //  山札めくり
 // ============================================================
-function drawCard() {
+async function drawCard() {
   if (isWin) return;
-  initAudio(); startTimer(); saveHist();
+  await initAudio(); startTimer(); saveHist();
   if (!stock.length) {
     // wasteを山札に戻す（コピーして逆順にしてからfaceをfalseに）
     stock = waste.slice().reverse();
