@@ -535,8 +535,32 @@ const SE_FILES = {
   win:   'audio/win.mp3',
   click: 'audio/click.mp3'
 };
+const seBuffers = {}; // name -> デコード済みAudioBuffer（事前ロードでモバイルの再生遅延を解消）
 let seVolume = 0.5;
 let seEnabled = true;
+
+// beep()等と共有のAudioContextを（未作成なら）用意する
+function ensureAudioCtx() {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { return null; }
+  }
+  return audioCtx;
+}
+
+// 起動直後に全SEをフェッチ＆デコードしておく（実際の再生時は待ち時間ゼロにする）
+function preloadSe() {
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  Object.entries(SE_FILES).forEach(([name, url]) => {
+    fetch(url)
+      .then(r => r.arrayBuffer())
+      .then(data => ctx.decodeAudioData(data))
+      .then(decoded => { seBuffers[name] = decoded; })
+      .catch(() => { /* 失敗時は再生時にHTMLAudioへフォールバック */ });
+  });
+}
+preloadSe();
 
 function loadSePrefs() {
   const vol = localStorage.getItem('sol_se_vol');
@@ -564,12 +588,26 @@ function updateSeButton() {
   btn.textContent = seEnabled ? '⏸ 効果音OFF' : '▶ 効果音ON';
 }
 
-// 短いSEを連続再生しても途切れないよう、毎回新しいAudioインスタンスで再生
+// 事前デコード済みバッファがあれば遅延なく再生。なければHTMLAudioにフォールバック
 function playSe(name) {
   if (!seEnabled) return;
-  const src = SE_FILES[name];
-  if (!src) return;
-  const a = new Audio(src);
+  const buf = seBuffers[name];
+  const ctx = audioCtx;
+  if (buf && ctx) {
+    try {
+      if (ctx.state === 'suspended') ctx.resume();
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const gain = ctx.createGain();
+      gain.gain.value = seVolume;
+      src.connect(gain).connect(ctx.destination);
+      src.start(0);
+      return;
+    } catch(e) { /* フォールバックへ */ }
+  }
+  const url = SE_FILES[name];
+  if (!url) return;
+  const a = new Audio(url);
   a.volume = seVolume;
   a.play().catch(()=>{ /* 自動再生制限で失敗しても無視 */ });
 }
