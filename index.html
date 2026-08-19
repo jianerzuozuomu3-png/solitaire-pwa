@@ -236,6 +236,25 @@ body {
   position: fixed; inset: 0;
   pointer-events: none; z-index: 1999; display: none;
 }
+
+/* ===== 配置生成中オーバーレイ ===== */
+#deal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(3,8,3,0.92);
+  z-index: 3000;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px;
+}
+#deal-overlay.show { display: flex; }
+.deal-spinner {
+  width: 34px; height: 34px;
+  border: 3px solid #234b23;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: deal-spin 0.7s linear infinite;
+}
+@keyframes deal-spin { to { transform: rotate(360deg); } }
+#deal-overlay p { color: #cde; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -312,6 +331,10 @@ body {
 </div>
 
 <canvas id="fx-canvas"></canvas>
+<div id="deal-overlay">
+  <div class="deal-spinner"></div>
+  <p id="deal-overlay-msg">解ける配置を探しています…</p>
+</div>
 
 <!-- 続きから再開ダイアログ -->
 <div class="dialog" id="dlg-resume">
@@ -1292,9 +1315,154 @@ function discardResume() {
 }
 
 // ============================================================
+//  配置ソルバー（Thoughtful Solitaire近似・draw-1想定・配り直し無制限を仮定）
+//  「最低1パターンはクリアできる配置」を保証するため、配った直後に
+//  実際に解けるかどうかを検証し、解けなければ配り直す。
+//  ※ 実際の draw-1 / draw-3 設定に関わらず draw-1 相当で検証する簡略化を行っている。
+//     （draw-3設定でも、配り直しが無制限であればほぼ同等に解けることが多いが、
+//       理論上ごく稀に draw-3 では通常より難しくなるケースがあり得る）
+// ============================================================
+function slvRankOf(id){ return id % 13 + 1; }
+function slvSuitOf(id){ return Math.floor(id / 13); }
+function slvColorOf(id){ return slvSuitOf(id) < 2 ? 0 : 1; }
+function slvCanFound(id, found){ return slvRankOf(id) === found[slvSuitOf(id)] + 1; }
+function slvCanTab(id, topId){
+  if (topId === null) return slvRankOf(id) === 13;
+  return slvColorOf(id) !== slvColorOf(topId) && slvRankOf(id) === slvRankOf(topId) - 1;
+}
+function slvMaxRun(col){
+  if (!col.length) return 0;
+  let n = 1;
+  for (let k = col.length - 1; k > 0; k--){
+    if (slvColorOf(col[k]) !== slvColorOf(col[k-1]) && slvRankOf(col[k]) === slvRankOf(col[k-1]) - 1) n++;
+    else break;
+  }
+  return n;
+}
+function slvClone(s){
+  return { tab: s.tab.map(c=>c.slice()), found: s.found.slice(), stock: s.stock.slice(), waste: s.waste.slice() };
+}
+function slvHash(s){
+  return s.tab.map(c=>c.join(',')).join('|')+'#'+s.found.join(',')+'#'+s.stock.join(',')+'#'+s.waste.join(',');
+}
+function slvIsSolved(s){ return s.found[0]===13&&s.found[1]===13&&s.found[2]===13&&s.found[3]===13; }
+function slvGenMoves(s){
+  const moves=[];
+  for(let i=0;i<7;i++){
+    if(!s.tab[i].length) continue;
+    const c=s.tab[i][s.tab[i].length-1];
+    if(slvCanFound(c,s.found)) moves.push({type:'t2f', i});
+  }
+  if(s.waste.length){
+    const c=s.waste[s.waste.length-1];
+    if(slvCanFound(c,s.found)) moves.push({type:'w2f'});
+  }
+  if(s.waste.length){
+    const c=s.waste[s.waste.length-1];
+    for(let j=0;j<7;j++){
+      const top=s.tab[j].length?s.tab[j][s.tab[j].length-1]:null;
+      if(slvCanTab(c,top)) moves.push({type:'w2t', j});
+    }
+  }
+  for(let i=0;i<7;i++){
+    const col=s.tab[i];
+    if(!col.length) continue;
+    const mr=slvMaxRun(col);
+    for(let k=1;k<=mr;k++){
+      const bottomCard=col[col.length-k];
+      for(let j=0;j<7;j++){
+        if(j===i) continue;
+        const top=s.tab[j].length?s.tab[j][s.tab[j].length-1]:null;
+        if(top===null && k===col.length) continue;
+        if(slvCanTab(bottomCard,top)) moves.push({type:'t2t', i, j, k});
+      }
+    }
+  }
+  if(s.stock.length) moves.push({type:'draw'});
+  if(!s.stock.length && s.waste.length) moves.push({type:'redeal'});
+  return moves;
+}
+function slvApply(s,m){
+  const n=slvClone(s);
+  switch(m.type){
+    case 't2f': { const c=n.tab[m.i].pop(); n.found[slvSuitOf(c)]=slvRankOf(c); break; }
+    case 'w2f': { const c=n.waste.pop(); n.found[slvSuitOf(c)]=slvRankOf(c); break; }
+    case 'w2t': { const c=n.waste.pop(); n.tab[m.j].push(c); break; }
+    case 't2t': { const moved=n.tab[m.i].splice(n.tab[m.i].length-m.k, m.k); n.tab[m.j].push(...moved); break; }
+    case 'draw': { n.waste.push(n.stock.pop()); break; }
+    case 'redeal': { n.stock=n.waste.slice().reverse(); n.waste=[]; break; }
+  }
+  return n;
+}
+function slvMoveScore(m,s){
+  if(m.type==='t2f'||m.type==='w2f') return 0;
+  if(m.type==='t2t') return (s.tab[m.i].length-m.k)===0 ? 1 : 2;
+  if(m.type==='w2t') return 3;
+  if(m.type==='draw') return 4;
+  return 5;
+}
+function slvSolve(initState, nodeBudget){
+  const visited=new Set();
+  let nodes=0;
+  function dfs(state){
+    if(slvIsSolved(state)) return true;
+    if(nodes++ > nodeBudget) return false;
+    const key=slvHash(state);
+    if(visited.has(key)) return false;
+    visited.add(key);
+    const moves=slvGenMoves(state);
+    if(!moves.length) return false;
+    moves.sort((a,b)=>slvMoveScore(a,state)-slvMoveScore(b,state));
+    for(const m of moves){
+      if(nodes>nodeBudget) return false;
+      if(dfs(slvApply(state,m))) return true;
+    }
+    return false;
+  }
+  return dfs(initState);
+}
+function slvDealIds(){
+  let ids=[]; for(let i=0;i<52;i++) ids.push(i);
+  for(let i=ids.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [ids[i],ids[j]]=[ids[j],ids[i]];
+  }
+  const tab=Array(7).fill(null).map(()=>[]);
+  let idx=0;
+  for(let col=0;col<7;col++) for(let row=0;row<=col;row++) tab[col].push(ids[idx++]);
+  const stock=ids.slice(idx);
+  return { tab, found:[0,0,0,0], stock, waste:[] };
+}
+const SLV_NODE_BUDGET = 10000;
+const SLV_MAX_ATTEMPTS = 60;
+const SLV_TIME_LIMIT_MS = 4000;
+
+// 解ける配置が見つかるまで配り直す（非同期・数フレームごとにUIへ制御を返す）
+async function generateSolvableDeal(){
+  const overlay = document.getElementById('deal-overlay');
+  const msgEl = document.getElementById('deal-overlay-msg');
+  overlay.classList.add('show');
+  const t0 = performance.now();
+  let lastDeal = null;
+  for (let attempt=1; attempt<=SLV_MAX_ATTEMPTS; attempt++){
+    const deal = slvDealIds();
+    lastDeal = deal;
+    const ok = slvSolve(deal, SLV_NODE_BUDGET);
+    if (ok) { overlay.classList.remove('show'); return deal; }
+    if (performance.now() - t0 > SLV_TIME_LIMIT_MS) break;
+    if (attempt % 3 === 0) {
+      msgEl.textContent = `解ける配置を探しています…（${attempt}回目）`;
+      await new Promise(r=>setTimeout(r,0)); // UIスレッドに制御を返す
+    }
+  }
+  overlay.classList.remove('show');
+  return lastDeal; // 上限に達したら最後の配置をそのまま使用
+}
+
+// ============================================================
 //  ゲーム開始
 // ============================================================
-function startGame(){
+async function startGame(){
   isWin=false;
   if(confettiID) cancelAnimationFrame(confettiID);
   confetti = []; // 紙吹雪配列をリセット
@@ -1309,30 +1477,19 @@ function startGame(){
   saveBest();
   clearGameState();
 
-  // デッキ生成（52枚すべてを確実に使用）
-  let deck=[];
-  for(let s=0;s<4;s++)
-    for(let r=0;r<13;r++)
-      deck.push({suit:SUITS[s],rank:RANKS[r],value:r+1,color:COLOR[s],face:false});
+  // デッキ生成（解ける配置が見つかるまで配り直す）
+  const deal = await generateSolvableDeal();
+  const idToCard = id => {
+    const s = Math.floor(id/13), r = id%13;
+    return { suit:SUITS[s], rank:RANKS[r], value:r+1, color:COLOR[s], face:false };
+  };
 
-  // Fisher-Yatesシャッフル（確実な52枚シャッフル）
-  for(let i=deck.length-1;i>0;i--){
-    const j=Math.floor(Math.random()*(i+1));
-    [deck[i],deck[j]]=[deck[j],deck[i]];
-  }
-
-  // ── シンプルな配布（標準ソリティアと同じ、試行・選別なし） ──
-  // 列iにi+1枚配り、一番上だけ表向き。完全ランダム1回。
-  tab = Array(7).fill(null).map(() => []);
-  let idx = 0;
-  for(let col=0; col<7; col++){
-    for(let row=0; row<=col; row++){
-      const card = deck[idx++];
-      card.face = (row === col);
-      tab[col].push(card);
-    }
-  }
-  stock = deck.slice(idx);
+  tab = deal.tab.map(col => col.map((id,i) => {
+    const c = idToCard(id);
+    c.face = (i === col.length-1);
+    return c;
+  }));
+  stock = deal.stock.map(idToCard);
   waste = []; found = [[],[],[],[]];
   render();
 }
