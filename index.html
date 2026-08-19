@@ -76,6 +76,13 @@ body {
 }
 #bgm-toggle.playing { background: var(--accent); color: #000; }
 #bgm-volume { flex: 1; }
+.bgm-divider { border-top: 1px solid #2a2a2a; margin: 8px 0; }
+#se-toggle {
+  width: 100%; background: #2a2a2a; color: #fff; border: 1px solid #3a3a3a;
+  border-radius: 6px; padding: 6px 0; font-size: 12px; cursor: pointer;
+}
+#se-toggle.playing { background: var(--accent); color: #000; }
+#se-volume { flex: 1; }
 
 /* ===== ボタン行（固定） ===== */
 #btn-bar {
@@ -248,6 +255,15 @@ body {
   <div class="bgm-row">
     <span class="bgm-label">🔈</span>
     <input type="range" id="bgm-volume" min="0" max="100" value="40" oninput="setBgmVolume(this.value)">
+    <span class="bgm-label">🔊</span>
+  </div>
+  <div class="bgm-divider"></div>
+  <div class="bgm-row">
+    <button id="se-toggle" onclick="toggleSe()">▶ 効果音ON</button>
+  </div>
+  <div class="bgm-row">
+    <span class="bgm-label">🔈</span>
+    <input type="range" id="se-volume" min="0" max="100" value="50" oninput="setSeVolume(this.value)">
     <span class="bgm-label">🔊</span>
   </div>
 </div>
@@ -510,6 +526,60 @@ document.addEventListener('touchstart', unlockAudioOnFirstInteraction, {once:tru
 document.addEventListener('click', unlockAudioOnFirstInteraction, {once:true});
 
 // ============================================================
+//  効果音（SE）
+// ============================================================
+const SE_FILES = {
+  move:  'audio/move.mp3',
+  flip:  'audio/flip.mp3',
+  error: 'audio/error.mp3',
+  win:   'audio/win.mp3',
+  click: 'audio/click.mp3'
+};
+let seVolume = 0.5;
+let seEnabled = true;
+
+function loadSePrefs() {
+  const vol = localStorage.getItem('sol_se_vol');
+  const v = vol !== null ? Number(vol) : 50;
+  seVolume = v / 100;
+  document.getElementById('se-volume').value = v;
+  seEnabled = localStorage.getItem('sol_se_on') !== '0'; // デフォルトON
+  updateSeButton();
+}
+
+function toggleSe() {
+  seEnabled = !seEnabled;
+  localStorage.setItem('sol_se_on', seEnabled ? '1' : '0');
+  updateSeButton();
+}
+
+function setSeVolume(v) {
+  seVolume = v / 100;
+  localStorage.setItem('sol_se_vol', v);
+}
+
+function updateSeButton() {
+  const btn = document.getElementById('se-toggle');
+  btn.classList.toggle('playing', seEnabled);
+  btn.textContent = seEnabled ? '⏸ 効果音OFF' : '▶ 効果音ON';
+}
+
+// 短いSEを連続再生しても途切れないよう、毎回新しいAudioインスタンスで再生
+function playSe(name) {
+  if (!seEnabled) return;
+  const src = SE_FILES[name];
+  if (!src) return;
+  const a = new Audio(src);
+  a.volume = seVolume;
+  a.play().catch(()=>{ /* 自動再生制限で失敗しても無視 */ });
+}
+
+// すべてのボタン操作に共通のクリック音（カードはdivなので対象外）
+document.addEventListener('click', e => {
+  if (e.target.closest('button')) playSe('click');
+});
+
+// ============================================================
 //  タイマー
 // ============================================================
 function startTimer() {
@@ -635,11 +705,12 @@ function el(tag, cls='') {
 // ============================================================
 function addPileTouchDrop(pile, type, idx) {
   pile.addEventListener('touchstart', e=>{
-    if(!selFrom) return;
+    if(!selFrom || autoID) return;
     e.preventDefault(); e.stopPropagation();
     const card = topCard(selFrom);
     if (type==='tab' && canTab(card,idx)) { clearSel(); doMove(selFrom,{t:'tab',i:idx}); }
     else if (type==='f' && canFnd(card,idx)) { clearSel(); doMove(selFrom,{t:'f',i:idx}); }
+    else playSe('error');
   }, {passive:false});
 }
 
@@ -660,13 +731,15 @@ function makeCard(card, from) {
   // ダブルクリック → 組札へ
   d.addEventListener('dblclick', e=>{
     e.stopPropagation();
-    if (!card.face) return;
+    if (!card.face || autoID) return;
     for(let i=0;i<4;i++) if(canFnd(card,i)){ doMove(from,{t:'f',i}); return; }
+    playSe('error');
   });
   // ドラッグ（PC）
   if (card.face) {
     d.draggable=true;
     d.addEventListener('dragstart', e=>{
+      if (isWin || autoID) { e.preventDefault(); return; }
       e.dataTransfer.setData('text/plain', JSON.stringify(from));
       e.dataTransfer.effectAllowed='move';
     });
@@ -684,7 +757,7 @@ function makeCard(card, from) {
 //  クリック・タッチ操作
 // ============================================================
 async function onCardClick(from) {
-  if (isWin) return;
+  if (isWin || autoID) return;
   await initAudio(); startTimer();
   const col = getCol(from);
   if (from.t==='waste' && from.idx !== waste.length-1) return;
@@ -694,7 +767,7 @@ async function onCardClick(from) {
 }
 
 async function onTouchCard(from, d) {
-  if (isWin) return;
+  if (isWin || autoID) return;
   await initAudio(); startTimer();
 
   const col = getCol(from);
@@ -774,20 +847,20 @@ function clearSel() {
 //  山札めくり
 // ============================================================
 async function drawCard() {
-  if (isWin) return;
+  if (isWin || autoID) return;
   await initAudio(); startTimer(); saveHist();
   if (!stock.length) {
     // wasteを山札に戻す（コピーして逆順にしてからfaceをfalseに）
     stock = waste.slice().reverse();
     stock.forEach(c=>{ c.face=false; });
     waste=[];
-    beep(300,0.12);
+    playSe('flip');
   } else {
     const n = drawThree?3:1;
     for(let i=0;i<n&&stock.length;i++){
       const c=stock.pop(); c.face=true; waste.push(c);
     }
-    beep(440,0.06);
+    playSe('flip');
   }
   render();
   saveGameState();
@@ -799,7 +872,7 @@ async function drawCard() {
 //  移動
 // ============================================================
 function doMove(from, to, silent=false) {
-  if (!silent) { saveHist(); beep(600,0.05); }
+  if (!silent) { saveHist(); }
   let cards;
   if(from.t==='tab')   cards=tab[from.i].splice(from.idx);
   else if(from.t==='waste') cards=[waste.pop()];
@@ -811,10 +884,13 @@ function doMove(from, to, silent=false) {
   } else {
     cards[0].face=true; found[to.i].push(cards[0]); score+=10;
   }
+  let revealed = false;
   if(from.t==='tab'&&tab[from.i].length){
     const last=tab[from.i][tab[from.i].length-1];
-    if(!last.face){ last.face=true; score+=5; if(!silent) beep(900,0.06,0.08); }
+    if(!last.face){ last.face=true; score+=5; revealed=true; }
   }
+  // 移動音とめくり音が重ならないよう、どちらか一方だけ再生
+  if(!silent) playSe(revealed ? 'flip' : 'move');
   render(); saveBest();
   if(!silent){
     saveGameState();
@@ -942,6 +1018,20 @@ function checkAuto(){
         if(moved) break;
       }
     }
+    // 捨て札も、一番上だけでなく埋もれているカードから直接回収を試みる
+    // （表向きの場札がすべて開いた時点で、以降は取り出し順を気にする必要がないため）
+    if(!moved&&waste.length){
+      for(let wi=waste.length-2;wi>=0;wi--){
+        const c=waste[wi];
+        for(let f=0;f<4;f++){
+          if(canFnd(c,f)){
+            const card=waste.splice(wi,1)[0];
+            found[f].push(card); score+=10; render(); moved=true; break;
+          }
+        }
+        if(moved) break;
+      }
+    }
     if(!moved&&!stock.length&&waste.length){
       stock=waste.slice().reverse();
       stock.forEach(c=>{ c.face=false; });
@@ -962,7 +1052,7 @@ function win(){
   document.getElementById('win-stats').textContent=`Score: ${score}  Time: ${fmt(timeEl)}`;
   document.getElementById('dlg-win').style.display='block';
   startConfetti();
-  playFanfare();
+  playSe('win');
 }
 
 // ============================================================
@@ -974,6 +1064,7 @@ function saveHist(){
 }
 function undo(){
   if(!history.length) return;
+  if(autoID){ clearInterval(autoID); autoID=null; } // オートクリア中の巻き戻りを防止
   const s=JSON.parse(history.pop());
   stock=s.stock; waste=s.waste; found=s.found; tab=s.tab; score=s.score; timeEl=s.timeEl;
   // タイマーを復元した時刻から再起動
@@ -990,12 +1081,14 @@ function undo(){
 // ============================================================
 function onDrop(e,toType,toIdx){
   e.preventDefault();
+  if (isWin || autoID) return;
   let from; try{ from=JSON.parse(e.dataTransfer.getData('text/plain')); }catch{ return; }
   const col=getCol(from);
   const card=from.idx!=null?col[from.idx]:col[col.length-1];
   if(!card) return;
   if(toType==='tab'&&canTab(card,toIdx)) doMove(from,{t:'tab',i:toIdx});
   else if(toType==='f'&&canFnd(card,toIdx)) doMove(from,{t:'f',i:toIdx});
+  else playSe('error');
 }
 
 // ============================================================
@@ -1148,6 +1241,7 @@ function resumeGame() {
     buildDeckRow();
     render();
     startTimer();
+    checkAuto(); // 保存時点で場札が全て表向きだった場合、オートクリアを再開
   } catch(e) {
     clearGameState(); startGame();
   }
@@ -1245,6 +1339,7 @@ function startConfetti(){
 calcLayout();
 loadBest();
 loadBgmPrefs();
+loadSePrefs();
 buildDeckRow();
 buildTabRow();
 checkResume();
