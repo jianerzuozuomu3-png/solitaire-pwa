@@ -1462,7 +1462,10 @@ async function generateSolvableDeal(){
 // ============================================================
 //  ゲーム開始
 // ============================================================
+let isDealing = false;
 async function startGame(){
+  if (isDealing) return; // 生成中の連打を無視
+  isDealing = true;
   isWin=false;
   if(confettiID) cancelAnimationFrame(confettiID);
   confetti = []; // 紙吹雪配列をリセット
@@ -1492,6 +1495,7 @@ async function startGame(){
   stock = deal.stock.map(idToCard);
   waste = []; found = [[],[],[],[]];
   render();
+  isDealing = false;
 }
 
 // ============================================================
