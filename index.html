@@ -1098,8 +1098,8 @@ function checkAuto(){
       stock.forEach(c=>{ c.face=false; });
       waste=[]; moved=true; render();
     }
-    if(!moved&&found.reduce((s,f)=>s+f.length,0)===52){ clearInterval(autoID); win(); return; }
-    if(!moved) clearInterval(autoID);
+    if(!moved&&found.reduce((s,f)=>s+f.length,0)===52){ clearInterval(autoID); autoID=null; win(); return; }
+    if(!moved){ clearInterval(autoID); autoID=null; }
   }, 80);
 }
 
