@@ -769,9 +769,9 @@ function addPileTouchDrop(pile, type, idx) {
     if(!selFrom || autoID) return;
     e.preventDefault(); e.stopPropagation();
     const card = topCard(selFrom);
-    if (type==='tab' && canTab(card,idx)) { clearSel(); doMove(selFrom,{t:'tab',i:idx}); }
-    else if (type==='f' && canFnd(card,idx)) { clearSel(); doMove(selFrom,{t:'f',i:idx}); }
-    else playSe('error');
+    if (type==='tab' && canTab(card,idx)) { const sf=selFrom; selFrom=null; selEl=null; doMove(sf,{t:'tab',i:idx}); }
+    else if (type==='f' && canFnd(card,idx)) { const sf=selFrom; selFrom=null; selEl=null; doMove(sf,{t:'f',i:idx}); }
+    else { playSe('error'); refreshSelHighlight(); }
   }, {passive:false});
 }
 
@@ -780,6 +780,10 @@ function addPileTouchDrop(pile, type, idx) {
 // ============================================================
 function makeCard(card, from) {
   const d = el('div', 'card ' + (card.face ? card.color : 'back'));
+  // 再レンダー後も同じカードのDOM要素を再特定できるよう位置情報を付与
+  d.dataset.t = from.t;
+  if (from.i != null) d.dataset.i = from.i;
+  if (from.idx != null) d.dataset.idx = from.idx;
 
   if (card.face) {
     const rc = el('span','c-rank'); rc.textContent = card.rank; d.appendChild(rc);
@@ -850,25 +854,26 @@ async function onTouchCard(from, d) {
 
     // 同じカードを再タップ → 選択解除
     if (selFrom.t===from.t && selFrom.i===from.i && selFrom.idx===from.idx) {
-      clearSel(); return;
+      selFrom=null; refreshSelHighlight(); return;
     }
 
     // 1枚のみ選択中 → 組札へ移動可能か判定
     const selIsTop = (selFrom.t !== 'tab') || (selIdx === selCol.length - 1);
     if (from.t === 'f' && selIsTop && canFnd(selCard, from.i)) {
-      doMove(selFrom, {t:'f', i:from.i}); clearSel(); return;
+      const sf = selFrom; selFrom = null; selEl = null; doMove(sf, {t:'f', i:from.i}); return;
     }
     // 場札への移動（1枚 or 複数枚グループ）
     if (from.t === 'tab' && canTab(selCard, from.i)) {
-      doMove(selFrom, {t:'tab', i:from.i}); clearSel(); return;
+      const sf = selFrom; selFrom = null; selEl = null; doMove(sf, {t:'tab', i:from.i}); return;
     }
     // 移動不可 → 選択を切り替え
-    clearSel();
+    selFrom = null;
   }
 
   // ── 新規選択 → 即時自動移動を試みる ──
-  selFrom = from; selEl = d; d.classList.add('selected');
-  autoMove(from, card);
+  selFrom = from;
+  autoMove(from, card); // 成功時はautoMove/doMove内でselFromがnullになりrenderもされる
+  refreshSelHighlight();
 }
 
 // 場札のidxからcol末尾まで、表向き連番グループかどうか確認
@@ -902,6 +907,26 @@ function autoMove(from, card) {
 function clearSel() {
   if (selEl) selEl.classList.remove('selected');
   selFrom=null; selEl=null;
+}
+
+// 指定した位置情報(from)に対応する、現在DOM上のカード要素を取得
+function getCardEl(from) {
+  let sel = `.card[data-t="${from.t}"]`;
+  if (from.i != null) sel += `[data-i="${from.i}"]`;
+  sel += from.idx != null ? `[data-idx="${from.idx}"]` : ':not([data-idx])';
+  return document.querySelector(sel);
+}
+
+// 選択ハイライトを、常に「再レンダー後の最新DOM要素」に対して張り直す。
+// touchstart中にrender()でDOM要素が丸ごと作り直されても、選択状態の見た目とイベント
+// リスナーの両方が確実に最新のものになるようにするための共通処理。
+function refreshSelHighlight() {
+  render();
+  if (selFrom) {
+    const el = getCardEl(selFrom);
+    if (el) { el.classList.add('selected'); selEl = el; return; }
+  }
+  selEl = null;
 }
 
 // ============================================================
