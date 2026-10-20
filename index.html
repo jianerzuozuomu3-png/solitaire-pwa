@@ -943,6 +943,8 @@ function refreshSelHighlight() {
 async function drawCard() {
   if (isWin || autoID) return;
   await initAudio(); startTimer(); saveHist();
+  // 山札操作は選択中のカード（特に捨て札トップ）を無効化しうるため、常に選択解除してから行う
+  clearSel();
   if (!stock.length) {
     // wasteを山札に戻す（コピーして逆順にしてからfaceをfalseに）
     stock = waste.slice().reverse();
